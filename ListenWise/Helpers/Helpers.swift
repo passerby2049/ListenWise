@@ -774,7 +774,7 @@ struct WordFlowView: View {
     // MARK: - Body
 
     var body: some View {
-        WordFlowLayout(spacing: usesNLTokenizer ? 0 : 4) {
+        WordFlowLayout(spacing: usesNLTokenizer ? 0 : 3) {
             ForEach(segments) { segment in
                 if segment.phrase != nil {
                     phraseSegmentView(segment: segment)
@@ -839,7 +839,7 @@ struct WordFlowView: View {
                 ForEach(segment.tokenIndices, id: \.self) { idx in
                     if idx == lastIdx && !lastTrailing.isEmpty {
                         Text(lastCore)
-                                            .foregroundStyle(Color.primary)
+                            .foregroundStyle(Color.primary)
                             .background(
                                 GeometryReader { geo in
                                     Color.clear.preference(
@@ -903,7 +903,6 @@ struct WordFlowView: View {
                 Text(trailing)
             }
         }
-        .font(.title3)
         .foregroundStyle(textColor)
         .background(
             GeometryReader { geo in

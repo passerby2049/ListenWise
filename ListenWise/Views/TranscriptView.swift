@@ -44,6 +44,8 @@ struct TranscriptView: View {
     @State var currentPlaybackTime = 0.0
     @State var currentLineIndex: Int? = nil
     @State var videoHeight: CGFloat = 350
+    @State private var isDraggingVideo = false
+    @State private var dragStartY: CGFloat = 0
     @State private var dragStartHeight: CGFloat = 0
     @State var currentSubtitleText: String = ""
     @State var currentSubtitleTranslation: String = ""
@@ -448,8 +450,7 @@ struct TranscriptView: View {
         ZStack {
             if let p = player {
                 NativeVideoPlayer(player: p)
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             // Subtitle overlay
@@ -566,12 +567,19 @@ struct TranscriptView: View {
                         if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                     }
                     .gesture(
-                        DragGesture()
+                        DragGesture(coordinateSpace: .global)
                             .onChanged { value in
-                                if dragStartHeight == 0 { dragStartHeight = videoHeight }
-                                videoHeight = min(max(dragStartHeight + value.translation.height, 150), 600)
+                                if !isDraggingVideo {
+                                    isDraggingVideo = true
+                                    dragStartY = value.startLocation.y
+                                    dragStartHeight = videoHeight
+                                }
+                                let delta = value.location.y - dragStartY
+                                videoHeight = min(max(dragStartHeight + delta, 150), 600)
                             }
-                            .onEnded { _ in dragStartHeight = 0 }
+                            .onEnded { _ in
+                                isDraggingVideo = false
+                            }
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 1.5)
@@ -820,16 +828,18 @@ struct TranscriptView: View {
             }
             .padding(.vertical, 8)
 
-            ScrollView {
-                if transcriptTab == .original {
-                    transcriptTextView
-                        .padding(20)
-                } else {
-                    translationTextView
-                        .padding(20)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if transcriptTab == .original {
+                        transcriptTextView(proxy: proxy)
+                            .padding(20)
+                    } else {
+                        translationTextView(proxy: proxy)
+                            .padding(20)
+                    }
                 }
+                .clipped()
             }
-            .clipped()
         }
         .onChange(of: transcriptTab) { _, newTab in
             if newTab == .bilingual && translationPairs.isEmpty && !isTranslatingLines {
@@ -839,7 +849,7 @@ struct TranscriptView: View {
     }
 
     @ViewBuilder
-    var translationTextView: some View {
+    func translationTextView(proxy: ScrollViewProxy) -> some View {
         LazyVStack(alignment: .leading, spacing: 16) {
             // Use reorganized cards if available (they have zh translations)
             if showReorganized && !reorganizedCards.isEmpty {
@@ -864,34 +874,32 @@ struct TranscriptView: View {
                 }
 
                 let active = currentLineIndex
-                ScrollViewReader { proxy in
-                    ForEach(reorganizedCards.indices, id: \.self) { i in
-                        HStack(alignment: .top, spacing: 16) {
-                            timestampButton(index: i, isActive: i == active, startTime: reorganizedCards[i].start)
-                                .padding(.top, 3)
-                            VStack(alignment: .leading, spacing: 6) {
-                                WordFlowView(text: reorganizedCards[i].text, markedWords: $markedWords, isActive: i == active)
-                                    .font(.system(size: 18))
-                                if !reorganizedCards[i].translation.isEmpty {
-                                    Text(reorganizedCards[i].translation)
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(.secondary)
-                                        .opacity(i == active ? 1 : 0.7)
-                                }
+                ForEach(reorganizedCards.indices, id: \.self) { i in
+                    HStack(alignment: .top, spacing: 16) {
+                        timestampButton(index: i, isActive: i == active, startTime: reorganizedCards[i].start)
+                            .padding(.top, 3)
+                        VStack(alignment: .leading, spacing: 6) {
+                            WordFlowView(text: reorganizedCards[i].text, markedWords: $markedWords, isActive: i == active)
+                                .font(.system(size: 18))
+                            if !reorganizedCards[i].translation.isEmpty {
+                                Text(reorganizedCards[i].translation)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.secondary)
+                                    .opacity(i == active ? 1 : 0.7)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .foregroundStyle(i == active ? .primary : .secondary)
-                        .id("tr_\(i)")
                     }
-                    .onChange(of: active) { _, newIndex in
-                        guard let idx = newIndex else { return }
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            proxy.scrollTo("tr_\(idx)", anchor: .center)
-                        }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(i == active ? .primary : .secondary)
+                    .id("tr_\(i)")
+                }
+                .onChange(of: active) { _, newIndex in
+                    guard let idx = newIndex else { return }
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo("tr_\(idx)", anchor: .center)
                     }
                 }
             } else if isTranslatingLines {
@@ -1021,28 +1029,26 @@ struct TranscriptView: View {
     }
 
     @ViewBuilder
-    var transcriptTextView: some View {
+    func transcriptTextView(proxy: ScrollViewProxy) -> some View {
         let lines = displayLines
         let active = currentLineIndex
         let cards = activeSubtitleCards
-        ScrollViewReader { proxy in
-            LazyVStack(alignment: .leading, spacing: 4) {
-                ForEach(lines.indices, id: \.self) { i in
-                    transcriptLine(
-                        index: i,
-                        text: lines[i],
-                        isActive: i == active,
-                        hasTimestamp: i < cards.count,
-                        startTime: i < cards.count ? cards[i].start : 0
-                    )
-                }
+        return LazyVStack(alignment: .leading, spacing: 4) {
+            ForEach(lines.indices, id: \.self) { i in
+                transcriptLine(
+                    index: i,
+                    text: lines[i],
+                    isActive: i == active,
+                    hasTimestamp: i < cards.count,
+                    startTime: i < cards.count ? cards[i].start : 0
+                )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onChange(of: active) { _, newIndex in
-                guard let idx = newIndex else { return }
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(idx, anchor: .center)
-                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: active) { _, newIndex in
+            guard let idx = newIndex else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                proxy.scrollTo(idx, anchor: .center)
             }
         }
     }
