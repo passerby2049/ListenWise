@@ -926,7 +926,7 @@ struct TranscriptView: View {
                 }
                 ForEach(translationPairs.indices, id: \.self) { i in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(translationPairs[i].source)
+                        WordFlowView(text: translationPairs[i].source, markedWords: $markedWords)
                             .font(.body)
                         Text(translationPairs[i].target)
                             .font(.body)
@@ -952,7 +952,6 @@ struct TranscriptView: View {
                 .padding(.top, 40)
             }
         }
-        .textSelection(.enabled)
     }
 
     var displayLines: [String] {
