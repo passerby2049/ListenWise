@@ -157,6 +157,57 @@ func parseLLMJSONObject<T: Decodable>(_ raw: String) -> T? {
     return try? JSONDecoder().decode(T.self, from: data)
 }
 
+// MARK: - Word Chip View (hover to reveal ×)
+
+struct WordChipView: View {
+    let word: String
+    var onTap: () -> Void
+    var onRemove: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        ZStack {
+            // Invisible sizer — always text + × to fix chip width
+            HStack(spacing: 4) {
+                Text(word).font(.callout)
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .opacity(0)
+
+            // Visible: text centered, or text + × when hovered
+            if isHovered {
+                HStack(spacing: 4) {
+                    Text(word).font(.callout)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .onTapGesture(perform: onRemove)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+            } else {
+                Text(word)
+                    .font(.callout)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+            }
+        }
+        .background(Color.yellow.opacity(0.15))
+        .overlay(Capsule().stroke(Color.yellow.opacity(0.3), lineWidth: 1))
+        .clipShape(Capsule())
+        .contentShape(Capsule())
+        .onTapGesture(perform: onTap)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
 // MARK: - Word Flow Layout & Views
 
 /// A SwiftUI Layout that wraps child views like words in a paragraph.
@@ -270,6 +321,7 @@ struct MarkdownView: View {
 struct WordExplanation: Codable, Identifiable {
     var id: String { word }
     let word: String
+    let phonetic: String?
     let pos: String
     let definition_source: String
     let definition_target: String
@@ -304,6 +356,8 @@ struct SentenceExplanation: Codable, Identifiable {
 struct WordCardListView: View {
     let explanations: [WordExplanation]
     var sentenceExplanations: [SentenceExplanation] = []
+    var onDeleteWord: ((String) -> Void)? = nil
+    var onDeleteSentence: ((String) -> Void)? = nil
 
     private var sortedExplanations: [WordExplanation] {
         explanations.sorted { $0.word.localizedCaseInsensitiveCompare($1.word) == .orderedAscending }
@@ -312,23 +366,28 @@ struct WordCardListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(sentenceExplanations) { item in
-                SentenceCardView(explanation: item)
+                SentenceCardView(explanation: item, onDelete: onDeleteSentence)
+                    .id(item.sentence.lowercased())
                     .transition(.opacity)
             }
             ForEach(Array(sortedExplanations.enumerated()), id: \.offset) { index, item in
-                WordCardView(explanation: item)
+                WordCardView(explanation: item, onDelete: onDeleteWord)
+                    .id(item.word.lowercased())
                     .transition(.opacity)
             }
         }
     }
 }
 
+private let sharedSpeechSynthesizer = NSSpeechSynthesizer()
+
 struct WordCardView: View {
     let explanation: WordExplanation
+    var onDelete: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Header: Word + POS
+            // Header: Word + Phonetic + POS + Speak + Delete
             HStack(alignment: .center, spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.orange)
@@ -336,6 +395,11 @@ struct WordCardView: View {
                 Text(explanation.word)
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Color.orange)
+                if let phonetic = explanation.phonetic, !phonetic.isEmpty {
+                    Text(phonetic)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
                 Text(explanation.pos.uppercased())
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -343,6 +407,24 @@ struct WordCardView: View {
                     .padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
+                Button {
+                    sharedSpeechSynthesizer.stopSpeaking()
+                    sharedSpeechSynthesizer.startSpeaking(explanation.word)
+                } label: {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.orange)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if let onDelete {
+                    Button { onDelete(explanation.word.lowercased()) } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.bottom, 2)
 
@@ -413,7 +495,7 @@ struct WordCardView: View {
 
             // Collocations (optional)
             if !explanation.collocations.isEmpty {
-                HStack(spacing: 6) {
+                WordFlowLayout(spacing: 6) {
                     ForEach(explanation.collocations.prefix(5), id: \.self) { col in
                         Text(col)
                             .font(.system(size: 11))
@@ -421,6 +503,7 @@ struct WordCardView: View {
                             .padding(.vertical, 3)
                             .background(Color.secondary.opacity(0.08))
                             .clipShape(Capsule())
+                            .fixedSize()
                     }
                 }
             }
@@ -439,6 +522,7 @@ struct WordCardView: View {
 
 struct SentenceCardView: View {
     let explanation: SentenceExplanation
+    var onDelete: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -454,6 +538,15 @@ struct SentenceCardView: View {
                     .padding(.vertical, 2)
                     .background(Color.blue.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
+                Spacer()
+                if let onDelete {
+                    Button { onDelete(explanation.sentence.lowercased()) } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.bottom, 2)
 
@@ -551,6 +644,7 @@ private struct WordFrameKey: PreferenceKey {
 struct WordFlowView: View {
     let text: String
     @Binding var markedWords: Set<String>
+    var isActive: Bool = true
 
     // Drag-to-select state
     @State private var dragStartIndex: Int? = nil
@@ -713,12 +807,13 @@ struct WordFlowView: View {
         return (core, trailing)
     }
 
+    private var textColor: Color { isActive ? Color.primary : Color.secondary }
+
     /// Plain text with geometry tracking (no highlight)
     @ViewBuilder
     private func wordTextPlain(index: Int) -> some View {
         Text(tokens[index])
-            .font(.title3)
-            .foregroundStyle(Color.primary)
+            .foregroundStyle(textColor)
             .background(
                 GeometryReader { geo in
                     Color.clear.preference(
@@ -740,12 +835,11 @@ struct WordFlowView: View {
         let (lastCore, lastTrailing) = splitTrailing(tokens[lastIdx])
 
         HStack(spacing: 0) {
-            HStack(spacing: 2) {
+            HStack(spacing: 4) {
                 ForEach(segment.tokenIndices, id: \.self) { idx in
                     if idx == lastIdx && !lastTrailing.isEmpty {
                         Text(lastCore)
-                            .font(.title3)
-                            .foregroundStyle(Color.primary)
+                                            .foregroundStyle(Color.primary)
                             .background(
                                 GeometryReader { geo in
                                     Color.clear.preference(
@@ -769,8 +863,7 @@ struct WordFlowView: View {
 
             if !lastTrailing.isEmpty {
                 Text(lastTrailing)
-                    .font(.title3)
-                    .foregroundStyle(Color.primary)
+                            .foregroundStyle(textColor)
             }
         }
         .onTapGesture {
@@ -811,7 +904,7 @@ struct WordFlowView: View {
             }
         }
         .font(.title3)
-        .foregroundStyle(Color.primary)
+        .foregroundStyle(textColor)
         .background(
             GeometryReader { geo in
                 Color.clear.preference(

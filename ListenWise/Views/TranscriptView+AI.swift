@@ -69,58 +69,164 @@ extension TranscriptView {
         reorganizeProgress = ""
         isReorganizing = true
 
-        let numberedCards = cards.enumerated().map { i, card in
-            "[\(i)] \(card.text)"
-        }.joined(separator: "\n")
-
         let srcLang = story.sourceLanguage
         let tgtLang = story.targetLanguage
 
-        let prompt = """
-        Task: Merge these numbered \(srcLang) speech fragments into proper sentences. Fix typos. One sentence per entry. Keep it short.
+        // Split cards into batches by 10-minute intervals
+        let batches = splitIntoBatches(cards: cards, intervalSeconds: 600)
 
-        Rules:
-        - Output JSON array ONLY. No explanation, no markdown.
-        - Format: [{"cards": [0,1], "text": "Merged sentence.", "target": "\(tgtLang) translation."}]
-        - Each entry must be exactly ONE complete sentence. Split at every sentence-ending punctuation (. ? ! 。？！ etc.).
-        - Every index must appear exactly once, in order.
-        - Do NOT summarize. Keep the original meaning word-for-word.
-        - "target" is the \(tgtLang) translation of the "text" field.
+        var allResults: [(text: String, translation: String, start: Double, end: Double)] = []
+        var previousContext: [String] = [] // merged sentences from prior batches
 
-        Input:
-        \(numberedCards)
-        """
+        for (batchIndex, batch) in batches.enumerated() {
+            guard !Task.isCancelled else { break }
 
-        var rawResponse = ""
-        do {
-            for try await token in AIProvider.stream(prompt: prompt, model: selectedModel) {
-                try Task.checkCancellation()
-                rawResponse += token
-                reorganizeProgress = String(rawResponse.suffix(200))
+            reorganizeProgress = "Processing batch \(batchIndex + 1)/\(batches.count)..."
+
+            let numberedCards = batch.cards.enumerated().map { i, card in
+                "[\(i)] \(card.text)"
+            }.joined(separator: "\n")
+
+            let contextSection: String
+            if previousContext.isEmpty {
+                contextSection = ""
+            } else {
+                // Only include last ~20 sentences to keep prompt manageable
+                let recentContext = previousContext.suffix(20)
+                contextSection = """
+
+                Previously processed text for context (do not include in output, do not re-process):
+                \(recentContext.joined(separator: "\n"))
+
+                """
             }
 
-            if let sentences = parseReorganizeJSON(rawResponse) {
-                var result: [(text: String, translation: String, start: Double, end: Double)] = []
-                for sentence in sentences {
-                    guard !sentence.cards.isEmpty else { continue }
-                    let validIndices = sentence.cards.filter { $0 >= 0 && $0 < cards.count }
-                    guard !validIndices.isEmpty else { continue }
-                    let start = cards[validIndices.first!].start
-                    let end = cards[validIndices.last!].end
-                    result.append((text: sentence.text, translation: sentence.target ?? "", start: start, end: end))
+            let prompt = """
+            Task: Merge these numbered \(srcLang) speech fragments into proper sentences. Fix typos. One sentence per entry. Keep it short.
+
+            Rules:
+            - Output JSON array ONLY. No explanation, no markdown.
+            - Format: [{"cards": [0,1], "text": "Merged sentence.", "target": "\(tgtLang) translation."}]
+            - Each entry must be exactly ONE complete sentence. Split at every sentence-ending punctuation (. ? ! 。？！ etc.).
+            - Every index must appear exactly once, in order. Indices are 0-based for this batch only.
+            - Do NOT summarize. Keep the original meaning word-for-word.
+            - "target" is the \(tgtLang) translation of the "text" field.
+
+            Example:
+            Input:
+            [0] Sandra,
+            [1] I can tell you that I phoned President Trump to ask him,
+            [2] once these reports started coming out,
+            [3] that the Attorney General had been told that her time,
+            [4] it was nearing the end of her time at the Justice Department,
+            [5] and the president said,
+            [6] he was preparing some remarks,
+            [7] we think that it is going to be the official announcement about the Attorney General,
+            [8] Bondi,
+            [9] leaving the Justice Department.
+            Output:
+            [{"cards":[0,1,2],"text":"Sandra, I can tell you that I phoned President Trump to ask him, once these reports started coming out,","target":"Sandra，我可以告诉你，当这些报道开始出来后，我打电话给特朗普总统询问，"},{"cards":[3,4],"text":"that the Attorney General had been told it was nearing the end of her time at the Justice Department.","target":"司法部长已被告知她在司法部的任期即将结束。"},{"cards":[5,6],"text":"And the president said he was preparing some remarks.","target":"总统说他正在准备一些讲话。"},{"cards":[7,8,9],"text":"We think that it is going to be the official announcement about Attorney General Bondi leaving the Justice Department.","target":"我们认为这将是关于司法部长Bondi离开司法部的正式公告。"}]
+            \(contextSection)
+            Input:
+            \(numberedCards)
+            """
+
+            var rawResponse = ""
+            do {
+                for try await token in AIProvider.stream(prompt: prompt, model: selectedModel) {
+                    try Task.checkCancellation()
+                    rawResponse += token
+                    reorganizeProgress = "Batch \(batchIndex + 1)/\(batches.count): " + String(rawResponse.suffix(150))
                 }
-                reorganizedCards = result
-                showReorganized = true
 
-                story.savedReorganizedCards = reorganizedCards
-                StoryStore.shared.save(story)
+                if let sentences = parseReorganizeJSON(rawResponse) {
+                    for sentence in sentences {
+                        guard !sentence.cards.isEmpty else { continue }
+                        let validIndices = sentence.cards.filter { $0 >= 0 && $0 < batch.cards.count }
+                        guard !validIndices.isEmpty else { continue }
+                        // Map local indices back to global card positions
+                        let globalFirst = batch.offset + validIndices.first!
+                        let globalLast = batch.offset + validIndices.last!
+                        guard globalFirst < cards.count && globalLast < cards.count else { continue }
+                        let start = cards[globalFirst].start
+                        let end = cards[globalLast].end
+                        allResults.append((text: sentence.text, translation: sentence.target ?? "", start: start, end: end))
+                        previousContext.append(sentence.text)
+                    }
+                    // Update UI progressively
+                    reorganizedCards = allResults
+                    showReorganized = true
+                }
+            } catch is CancellationError {
+                break
+            } catch {
+                reorganizeProgress = "Batch \(batchIndex + 1) failed: \(error.localizedDescription)"
+                break
             }
-        } catch is CancellationError {
-            // Keep partial
-        } catch {
-            reorganizeProgress = "Failed: \(error.localizedDescription)"
+        }
+
+        if !allResults.isEmpty {
+            reorganizedCards = allResults
+            showReorganized = true
+            story.savedReorganizedCards = reorganizedCards
+            StoryStore.shared.save(story)
         }
         isReorganizing = false
+    }
+
+    private struct CardBatch {
+        let offset: Int // global index of first card in this batch
+        let cards: [(text: String, start: Double, end: Double)]
+    }
+
+    /// Split cards into batches at ~10-minute intervals, cutting at the first sentence-ending card past the boundary.
+    private func splitIntoBatches(cards: [(text: String, start: Double, end: Double)], intervalSeconds: Double) -> [CardBatch] {
+        guard !cards.isEmpty else { return [] }
+
+        let sentenceEnders: Set<Character> = [".", "?", "!", "。", "？", "！"]
+        var batches: [CardBatch] = []
+        var batchStart = 0
+        var nextBoundary = intervalSeconds
+
+        var i = 0
+        while i < cards.count {
+            let card = cards[i]
+            if card.end >= nextBoundary {
+                // Look for first sentence-ending card at or after this point
+                var cutIndex = i
+                let trimmed = card.text.trimmingCharacters(in: .whitespaces)
+                if let last = trimmed.last, sentenceEnders.contains(last) {
+                    cutIndex = i
+                } else {
+                    // Search forward for nearest sentence-ending card
+                    var found = false
+                    for j in (i + 1)..<min(i + 20, cards.count) {
+                        let t = cards[j].text.trimmingCharacters(in: .whitespaces)
+                        if let last = t.last, sentenceEnders.contains(last) {
+                            cutIndex = j
+                            found = true
+                            break
+                        }
+                    }
+                    if !found { cutIndex = i }
+                }
+
+                let batch = CardBatch(offset: batchStart, cards: Array(cards[batchStart...cutIndex]))
+                batches.append(batch)
+                batchStart = cutIndex + 1
+                nextBoundary = cards[min(batchStart, cards.count - 1)].start + intervalSeconds
+                i = batchStart
+            } else {
+                i += 1
+            }
+        }
+
+        // Remaining cards
+        if batchStart < cards.count {
+            batches.append(CardBatch(offset: batchStart, cards: Array(cards[batchStart...])))
+        }
+
+        return batches
     }
 
     func parseReorganizeJSON(_ raw: String) -> [ReorganizedSentence]? {
@@ -153,7 +259,7 @@ extension TranscriptView {
 
         let itemList = newItems.sorted().joined(separator: "\n- ")
         let context = contextLines.isEmpty ? "" :
-            "Context from transcript:\n" + contextLines.map { "- \($0)" }.joined(separator: "\n")
+            "Context from transcript (for reference only — do NOT analyze these sentences as items):\n" + contextLines.map { "- \($0)" }.joined(separator: "\n")
 
         let prompt = """
         I'm learning \(srcLang). Below are items I selected from a transcript. Each item may be a single word, a short phrase, or a full sentence/clause. You decide which type each one is.
@@ -174,6 +280,7 @@ extension TranscriptView {
         For single words or short phrases (1-2 words), put them in "words" with this format:
         {
           "word": "the word/phrase",
+          "phonetic": "IPA pronunciation (e.g. /ˈdɪŋɡi/)",
           "pos": "part of speech (e.g. n./v./adj.)",
           "definition_source": "\(srcLang) definition",
           "definition_target": "\(tgtLang) definition",

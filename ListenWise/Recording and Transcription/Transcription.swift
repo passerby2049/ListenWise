@@ -21,6 +21,7 @@ final class SpokenWordTranscriber {
 
     var volatileTranscript: AttributedString = ""
     var finalizedTranscript: AttributedString = ""
+    var finalizedLineCount: Int = 0
 
     static let defaultLocale = Locale(components: .init(languageCode: .english, script: nil, languageRegion: .unitedStates))
 
@@ -138,6 +139,7 @@ final class SpokenWordTranscriber {
 
     func updateStoryWithNewText(withFinal str: AttributedString) {
         story.text.wrappedValue.append(str)
+        finalizedLineCount += 1
     }
 }
 

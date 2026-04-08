@@ -43,6 +43,8 @@ struct TranscriptView: View {
     @State var isPlaying = false
     @State var currentPlaybackTime = 0.0
     @State var currentLineIndex: Int? = nil
+    @State var videoHeight: CGFloat = 350
+    @State private var dragStartHeight: CGFloat = 0
     @State var currentSubtitleText: String = ""
     @State var currentSubtitleTranslation: String = ""
     @State var duration = 0.0
@@ -88,6 +90,7 @@ struct TranscriptView: View {
     // Chat
     @State var chatMessages: [ChatMessage] = []
     @State var chatInput: String = ""
+    @State var vocabScrollTarget: String? = nil
     @State var isChatting: Bool = false
     @State private var chatTask: Task<Void, Never>?
 
@@ -296,7 +299,16 @@ struct TranscriptView: View {
 
             let cards = activeSubtitleCards
             let newIndex = cards.firstIndex { $0.start <= t && t < $0.end }
-            currentLineIndex = newIndex
+            if newIndex != currentLineIndex {
+                currentLineIndex = newIndex
+                // Auto-scroll vocab panel to first marked word in current subtitle
+                if let idx = newIndex, inspectorTab == .vocab, !markedWords.isEmpty {
+                    let lineText = cards[idx].text.lowercased()
+                    if let firstMatch = markedWords.sorted().first(where: { lineText.contains($0) }) {
+                        vocabScrollTarget = firstMatch
+                    }
+                }
+            }
 
             if isVideo {
                 currentSubtitleText = newIndex.map { cards[$0].text } ?? ""
@@ -411,16 +423,18 @@ struct TranscriptView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if !speechTranscriber.finalizedTranscript.characters.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading) {
-                        Text(speechTranscriber.finalizedTranscript + speechTranscriber.volatileTranscript)
-                            .font(.body)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            if speechTranscriber.finalizedLineCount > 0 {
+                Text("\(speechTranscriber.finalizedLineCount) segments transcribed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            // Show only the current volatile (in-progress) text — lightweight
+            if !speechTranscriber.volatileTranscript.characters.isEmpty {
+                Text(speechTranscriber.volatileTranscript)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 40)
-                }
-                .frame(maxHeight: 400)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Spacer()
         }
@@ -540,14 +554,36 @@ struct TranscriptView: View {
             // Media player (video or audio)
             if sourceIsVideo {
                 videoPlayerWithSubtitle
-                    .frame(maxHeight: 400)
+                    .frame(height: videoHeight)
+                    .clipped()
+
+                // Drag handle to resize video
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 8)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if dragStartHeight == 0 { dragStartHeight = videoHeight }
+                                videoHeight = min(max(dragStartHeight + value.translation.height, 150), 600)
+                            }
+                            .onEnded { _ in dragStartHeight = 0 }
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Color.secondary.opacity(0.3))
+                            .frame(width: 36, height: 3)
+                    )
             } else {
                 audioPlayerBar
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
+                Divider()
             }
-
-            Divider()
 
             // Transcript area
             transcriptTabView
@@ -592,9 +628,23 @@ struct TranscriptView: View {
 
             // Tab content
             if inspectorTab == .vocab {
-                ScrollView {
-                    learningPanel
-                        .padding(20)
+                vocabHeader
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        vocabCards
+                            .padding(20)
+                    }
+                    .onChange(of: vocabScrollTarget) { _, target in
+                        if let target {
+                            withAnimation {
+                                proxy.scrollTo(target, anchor: .top)
+                            }
+                            vocabScrollTarget = nil
+                        }
+                    }
                 }
             } else {
                 ScrollView {
@@ -658,6 +708,14 @@ struct TranscriptView: View {
                     ForEach(TranscriptTab.allCases, id: \.self) { tab in
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) { transcriptTab = tab }
+                            // Re-trigger scroll to current line after tab switch
+                            if let idx = currentLineIndex {
+                                let saved = idx
+                                currentLineIndex = nil
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    currentLineIndex = saved
+                                }
+                            }
                         } label: {
                             Text(tab.rawValue)
                                 .font(.system(size: 11, weight: transcriptTab == tab ? .semibold : .medium))
@@ -694,6 +752,14 @@ struct TranscriptView: View {
                                 }
                                 if value && reorganizedCards.isEmpty && !isReorganizing {
                                     fixTask = Task { await reorganizeTranscript() }
+                                }
+                                // Re-trigger scroll to current line
+                                if let idx = currentLineIndex {
+                                    let saved = idx
+                                    currentLineIndex = nil
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        currentLineIndex = saved
+                                    }
                                 }
                             }
                         } label: {
@@ -800,26 +866,25 @@ struct TranscriptView: View {
                 let active = currentLineIndex
                 ScrollViewReader { proxy in
                     ForEach(reorganizedCards.indices, id: \.self) { i in
-                        HStack(alignment: .top, spacing: 6) {
+                        HStack(alignment: .top, spacing: 16) {
                             timestampButton(index: i, isActive: i == active, startTime: reorganizedCards[i].start)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(reorganizedCards[i].text)
-                                    .font(.body)
+                                .padding(.top, 3)
+                            VStack(alignment: .leading, spacing: 6) {
+                                WordFlowView(text: reorganizedCards[i].text, markedWords: $markedWords, isActive: i == active)
+                                    .font(.system(size: 18))
                                 if !reorganizedCards[i].translation.isEmpty {
                                     Text(reorganizedCards[i].translation)
-                                        .font(.body)
+                                        .font(.system(size: 14))
                                         .foregroundStyle(.secondary)
+                                        .opacity(i == active ? 1 : 0.7)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 6)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(i == active ? Color.accentColor.opacity(0.08) : Color.clear)
-                        )
+                        .foregroundStyle(i == active ? .primary : .secondary)
                         .id("tr_\(i)")
                     }
                     .onChange(of: active) { _, newIndex in
@@ -942,17 +1007,15 @@ struct TranscriptView: View {
                     .padding(.top, 3)
             }
             VStack(alignment: .leading, spacing: 8) {
-                WordFlowView(text: text, markedWords: $markedWords)
+                WordFlowView(text: text, markedWords: $markedWords, isActive: isActive)
                     .font(.system(size: 18))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isActive ? Color.accentColor.opacity(0.08) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
         .foregroundStyle(isActive ? .primary : .secondary)
         .id(index)
     }
@@ -963,7 +1026,7 @@ struct TranscriptView: View {
         let active = currentLineIndex
         let cards = activeSubtitleCards
         ScrollViewReader { proxy in
-            LazyVStack(alignment: .leading, spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: 4) {
                 ForEach(lines.indices, id: \.self) { i in
                     transcriptLine(
                         index: i,
@@ -987,8 +1050,8 @@ struct TranscriptView: View {
     // MARK: - Learning Panel (shared between video & audio)
 
     @ViewBuilder
-    var learningPanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
+    var vocabHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
             // Fix progress
             if isReorganizing {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1012,23 +1075,7 @@ struct TranscriptView: View {
                 Divider()
             }
 
-            // Empty state — no words selected
-            if markedWords.isEmpty && !isLoadingWordHelp && wordExplanations.isEmpty && sentenceExplanations.isEmpty && wordLearningResponse.isEmpty {
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "text.word.spacing")
-                        .font(.system(size: 36, weight: .light))
-                        .foregroundStyle(.tertiary)
-                    Text("Click a word to add it.\nDrag across words to select a phrase.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            // Marked words section
+            // Marked words header + chips
             if !markedWords.isEmpty || isLoadingWordHelp || !wordExplanations.isEmpty || !wordLearningResponse.isEmpty {
                 HStack(alignment: .center) {
                     Text("\(markedWords.count) ITEMS")
@@ -1089,58 +1136,97 @@ struct TranscriptView: View {
                     }
                 }
 
-                // Word chips
+                // Word chips — click to scroll to card
                 if !markedWords.isEmpty {
-                    WordFlowLayout(spacing: 6) {
-                        ForEach(markedWords.sorted(), id: \.self) { word in
-                            HStack(spacing: 4) {
-                                Text(word)
-                                Button {
+                    ScrollView {
+                        WordFlowLayout(spacing: 6) {
+                            ForEach(markedWords.sorted(), id: \.self) { word in
+                                WordChipView(word: word, onTap: {
+                                    vocabScrollTarget = word
+                                }, onRemove: {
                                     markedWords.remove(word)
                                     queriedWords.remove(word)
                                     wordExplanations.removeAll { $0.word.lowercased() == word }
                                     sentenceExplanations.removeAll { $0.sentence.lowercased().contains(word) }
                                     saveLearnProgress()
-                                } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.caption2)
-                                }
-                                .buttonStyle(.plain)
+                                })
                             }
-                            .font(.callout)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.yellow.opacity(0.15))
-                            .overlay(
-                                Capsule().stroke(Color.yellow.opacity(0.3), lineWidth: 1)
-                            )
-                            .clipShape(Capsule())
                         }
                     }
-                }
-
-                // Streaming progress (show right below word chips so user can see it immediately)
-                if isLoadingWordHelp && !wordLearningResponse.isEmpty {
-                    Text(wordLearningResponse)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(12)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-
-                // AI word explanation cards
-                if !wordExplanations.isEmpty || !sentenceExplanations.isEmpty {
-                    WordCardListView(explanations: wordExplanations, sentenceExplanations: sentenceExplanations)
-                } else if !wordLearningResponse.isEmpty && !isLoadingWordHelp {
-                    // JSON parse failed — show raw response as markdown fallback
-                    MarkdownView(markdown: wordLearningResponse)
-                        .padding(16)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .textSelection(.enabled)
+                    .frame(maxHeight: 150, alignment: .top)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    var vocabCards: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Empty state — no words selected
+            if markedWords.isEmpty && !isLoadingWordHelp && wordExplanations.isEmpty && sentenceExplanations.isEmpty && wordLearningResponse.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "text.word.spacing")
+                        .font(.system(size: 36, weight: .light))
+                        .foregroundStyle(.tertiary)
+                    Text("Click a word to add it.\nDrag across words to select a phrase.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Streaming progress
+            if isLoadingWordHelp && !wordLearningResponse.isEmpty {
+                Text(wordLearningResponse)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(12)
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            // AI word explanation cards
+            if !wordExplanations.isEmpty || !sentenceExplanations.isEmpty {
+                WordCardListView(
+                    explanations: wordExplanations,
+                    sentenceExplanations: sentenceExplanations,
+                    onDeleteWord: { word in
+                        wordExplanations.removeAll { $0.word.lowercased() == word }
+                        if markedWords.contains(word) {
+                            markedWords.remove(word)
+                            queriedWords.remove(word)
+                        }
+                        rebuildWordLearningResponse()
+                        saveLearnProgress()
+                    },
+                    onDeleteSentence: { sentence in
+                        sentenceExplanations.removeAll { $0.sentence.lowercased() == sentence }
+                        if markedWords.contains(sentence) {
+                            markedWords.remove(sentence)
+                            queriedWords.remove(sentence)
+                        }
+                        rebuildSentenceLearningResponse()
+                        saveLearnProgress()
+                    }
+                )
+            } else if !wordLearningResponse.isEmpty && !isLoadingWordHelp {
+                MarkdownView(markdown: wordLearningResponse)
+                    .padding(16)
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    var learningPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            vocabHeader
+            vocabCards
         }
     }
 
