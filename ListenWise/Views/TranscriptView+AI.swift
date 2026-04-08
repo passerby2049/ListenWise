@@ -72,34 +72,32 @@ extension TranscriptView {
         let srcLang = story.sourceLanguage
         let tgtLang = story.targetLanguage
 
-        // Split cards into batches by 10-minute intervals
-        let batches = splitIntoBatches(cards: cards, intervalSeconds: 600)
-
+        let batchInterval: Double = 600 // ~10 minutes per batch
         var allResults: [(text: String, translation: String, start: Double, end: Double)] = []
-        var previousContext: [String] = [] // merged sentences from prior batches
+        var cursor = 0 // next card to process
+        var batchIndex = 0
 
-        for (batchIndex, batch) in batches.enumerated() {
+        while cursor < cards.count {
             guard !Task.isCancelled else { break }
+            batchIndex += 1
 
-            reorganizeProgress = "Processing batch \(batchIndex + 1)/\(batches.count)..."
+            // Determine batch end: find the first card past the time boundary
+            let batchStartTime = cards[cursor].start
+            var batchEnd = cursor
+            while batchEnd < cards.count && cards[batchEnd].start < batchStartTime + batchInterval {
+                batchEnd += 1
+            }
+            // Include at least some cards, cap at end
+            batchEnd = max(batchEnd, cursor + 1)
+            batchEnd = min(batchEnd, cards.count)
 
-            let numberedCards = batch.cards.enumerated().map { i, card in
+            let batchCards = Array(cards[cursor..<batchEnd])
+            let totalBatchesEstimate = max(batchIndex, Int(ceil((cards.last!.end - cards[cursor].start) / batchInterval)) + batchIndex - 1)
+            reorganizeProgress = "Processing batch \(batchIndex)/~\(totalBatchesEstimate)..."
+
+            let numberedCards = batchCards.enumerated().map { i, card in
                 "[\(i)] \(card.text)"
             }.joined(separator: "\n")
-
-            let contextSection: String
-            if previousContext.isEmpty {
-                contextSection = ""
-            } else {
-                // Only include last ~20 sentences to keep prompt manageable
-                let recentContext = previousContext.suffix(20)
-                contextSection = """
-
-                Previously processed text for context (do not include in output, do not re-process):
-                \(recentContext.joined(separator: "\n"))
-
-                """
-            }
 
             let prompt = """
             Task: Merge these numbered \(srcLang) speech fragments into proper sentences. Fix typos. One sentence per entry. Keep it short.
@@ -111,6 +109,7 @@ extension TranscriptView {
             - Every index must appear exactly once, in order. Indices are 0-based for this batch only.
             - Do NOT summarize. Keep the original meaning word-for-word.
             - "target" is the \(tgtLang) translation of the "text" field.
+            - IMPORTANT: If the last few cards don't form a complete sentence, do NOT include them. Only output complete sentences. Leave trailing incomplete fragments out.
 
             Example:
             Input:
@@ -126,7 +125,6 @@ extension TranscriptView {
             [9] leaving the Justice Department.
             Output:
             [{"cards":[0,1,2],"text":"Sandra, I can tell you that I phoned President Trump to ask him, once these reports started coming out,","target":"Sandra，我可以告诉你，当这些报道开始出来后，我打电话给特朗普总统询问，"},{"cards":[3,4],"text":"that the Attorney General had been told it was nearing the end of her time at the Justice Department.","target":"司法部长已被告知她在司法部的任期即将结束。"},{"cards":[5,6],"text":"And the president said he was preparing some remarks.","target":"总统说他正在准备一些讲话。"},{"cards":[7,8,9],"text":"We think that it is going to be the official announcement about Attorney General Bondi leaving the Justice Department.","target":"我们认为这将是关于司法部长Bondi离开司法部的正式公告。"}]
-            \(contextSection)
             Input:
             \(numberedCards)
             """
@@ -136,31 +134,47 @@ extension TranscriptView {
                 for try await token in AIProvider.stream(prompt: prompt, model: selectedModel) {
                     try Task.checkCancellation()
                     rawResponse += token
-                    reorganizeProgress = "Batch \(batchIndex + 1)/\(batches.count): " + String(rawResponse.suffix(150))
+                    reorganizeProgress = "Batch \(batchIndex): " + String(rawResponse.suffix(150))
                 }
 
-                if let sentences = parseReorganizeJSON(rawResponse) {
-                    for sentence in sentences {
+                if let sentences = parseReorganizeJSON(rawResponse), !sentences.isEmpty {
+                    let isLastBatch = batchEnd >= cards.count
+                    // For non-last batches, discard the last sentence — it may be
+                    // incomplete since the LLM can't see what comes next.
+                    // Only trust up to the second-to-last sentence.
+                    let trusted = isLastBatch ? sentences : Array(sentences.dropLast())
+
+                    var maxUsedIndex = -1
+                    for sentence in trusted {
                         guard !sentence.cards.isEmpty else { continue }
-                        let validIndices = sentence.cards.filter { $0 >= 0 && $0 < batch.cards.count }
+                        let validIndices = sentence.cards.filter { $0 >= 0 && $0 < batchCards.count }
                         guard !validIndices.isEmpty else { continue }
-                        // Map local indices back to global card positions
-                        let globalFirst = batch.offset + validIndices.first!
-                        let globalLast = batch.offset + validIndices.last!
+                        let globalFirst = cursor + validIndices.first!
+                        let globalLast = cursor + validIndices.last!
                         guard globalFirst < cards.count && globalLast < cards.count else { continue }
                         let start = cards[globalFirst].start
                         let end = cards[globalLast].end
                         allResults.append((text: sentence.text, translation: sentence.target ?? "", start: start, end: end))
-                        previousContext.append(sentence.text)
+                        maxUsedIndex = max(maxUsedIndex, validIndices.last!)
+                    }
+                    // Next batch starts from the first card after the last trusted sentence
+                    if maxUsedIndex >= 0 {
+                        cursor += maxUsedIndex + 1
+                    } else {
+                        // LLM returned nothing useful, skip this batch to avoid infinite loop
+                        cursor = batchEnd
                     }
                     // Update UI progressively
                     reorganizedCards = allResults
                     showReorganized = true
+                } else {
+                    // Parse failed, skip batch
+                    cursor = batchEnd
                 }
             } catch is CancellationError {
                 break
             } catch {
-                reorganizeProgress = "Batch \(batchIndex + 1) failed: \(error.localizedDescription)"
+                reorganizeProgress = "Batch \(batchIndex) failed: \(error.localizedDescription)"
                 break
             }
         }
@@ -172,61 +186,6 @@ extension TranscriptView {
             StoryStore.shared.save(story)
         }
         isReorganizing = false
-    }
-
-    private struct CardBatch {
-        let offset: Int // global index of first card in this batch
-        let cards: [(text: String, start: Double, end: Double)]
-    }
-
-    /// Split cards into batches at ~10-minute intervals, cutting at the first sentence-ending card past the boundary.
-    private func splitIntoBatches(cards: [(text: String, start: Double, end: Double)], intervalSeconds: Double) -> [CardBatch] {
-        guard !cards.isEmpty else { return [] }
-
-        let sentenceEnders: Set<Character> = [".", "?", "!", "。", "？", "！"]
-        var batches: [CardBatch] = []
-        var batchStart = 0
-        var nextBoundary = intervalSeconds
-
-        var i = 0
-        while i < cards.count {
-            let card = cards[i]
-            if card.end >= nextBoundary {
-                // Look for first sentence-ending card at or after this point
-                var cutIndex = i
-                let trimmed = card.text.trimmingCharacters(in: .whitespaces)
-                if let last = trimmed.last, sentenceEnders.contains(last) {
-                    cutIndex = i
-                } else {
-                    // Search forward for nearest sentence-ending card
-                    var found = false
-                    for j in (i + 1)..<min(i + 20, cards.count) {
-                        let t = cards[j].text.trimmingCharacters(in: .whitespaces)
-                        if let last = t.last, sentenceEnders.contains(last) {
-                            cutIndex = j
-                            found = true
-                            break
-                        }
-                    }
-                    if !found { cutIndex = i }
-                }
-
-                let batch = CardBatch(offset: batchStart, cards: Array(cards[batchStart...cutIndex]))
-                batches.append(batch)
-                batchStart = cutIndex + 1
-                nextBoundary = cards[min(batchStart, cards.count - 1)].start + intervalSeconds
-                i = batchStart
-            } else {
-                i += 1
-            }
-        }
-
-        // Remaining cards
-        if batchStart < cards.count {
-            batches.append(CardBatch(offset: batchStart, cards: Array(cards[batchStart...])))
-        }
-
-        return batches
     }
 
     func parseReorganizeJSON(_ raw: String) -> [ReorganizedSentence]? {

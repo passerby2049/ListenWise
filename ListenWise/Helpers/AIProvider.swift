@@ -14,21 +14,17 @@ struct AIProvider {
         case anthropic
     }
 
+    private static let prefs = AppPreferences()
+
     static var anthropicBase: URL {
-        URL(string: UserDefaults.standard.string(forKey: "anthropicBaseURL") ?? "https://api.anthropic.com") ?? URL(string: "https://api.anthropic.com")!
+        URL(string: prefs.anthropicBaseURL) ?? URL(string: "https://api.anthropic.com")!
     }
 
     static let openRouterBase = URL(string: "https://openrouter.ai/api/v1")!
 
-    static var openRouterKey: String {
-        get { UserDefaults.standard.string(forKey: "openRouterAPIKey") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "openRouterAPIKey") }
-    }
+    static var openRouterKey: String { prefs.openRouterAPIKey }
 
-    static var anthropicKey: String {
-        get { UserDefaults.standard.string(forKey: "anthropicAPIKey") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "anthropicAPIKey") }
-    }
+    static var anthropicKey: String { prefs.anthropicAPIKey }
 
     static let anthropicModels = [
         "claude-opus-4-6",
