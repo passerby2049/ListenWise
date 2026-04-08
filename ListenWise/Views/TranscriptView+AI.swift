@@ -223,7 +223,7 @@ extension TranscriptView {
         let prompt = """
         I'm learning \(srcLang). Below are items I selected from a transcript. Each item may be a single word, a short phrase, or a full sentence/clause. You decide which type each one is.
 
-        IMPORTANT: Each item must appear in exactly ONE category. Do NOT break an item into sub-words. For example, if the item is "he is not bluffing", put it in "sentences" only — do NOT also add "bluffing" to "words".
+        IMPORTANT: Each item must appear in exactly ONE category. Do NOT break an item into sub-words. For example, if the item is "he is not bluffing", put it in "sentences" only — do NOT also add "bluffing" to "words". Return exactly ONE entry per item.
 
         Items:
         - \(itemList)

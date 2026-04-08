@@ -27,6 +27,20 @@ final class AppPreferences {
         set { UserDefaults.standard.set(newValue, forKey: "defaultModel") }
     }
 
+    /// "system", "light", or "dark"
+    var appearance: String {
+        get { UserDefaults.standard.string(forKey: "appearance") ?? "system" }
+        set { UserDefaults.standard.set(newValue, forKey: "appearance") }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch appearance {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
+
     var configuredProvidersSummary: String {
         let providers = [
             openRouterAPIKey.isEmpty ? nil : "OpenRouter",

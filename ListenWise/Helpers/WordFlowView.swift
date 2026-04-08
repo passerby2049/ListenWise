@@ -344,9 +344,14 @@ struct WordFlowView: View {
         let separator = usesNLTokenizer ? "" : " "
         let phrase = tokens[range].map { key(for: $0) }.joined(separator: separator)
         guard !phrase.isEmpty else { return }
-        // Remove any single words now covered by the phrase
+        // Remove any single words or shorter phrases now covered by the new phrase
         for idx in range {
             markedWords.remove(key(for: tokens[idx]))
+        }
+        markedWords = markedWords.filter { existing in
+            // Remove old phrases that are a substring of the new one
+            if existing.count < phrase.count && phrase.contains(existing) { return false }
+            return true
         }
         markedWords.insert(phrase)
     }

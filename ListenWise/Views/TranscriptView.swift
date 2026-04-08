@@ -1153,7 +1153,7 @@ struct TranscriptView: View {
                                     markedWords.remove(word)
                                     queriedWords.remove(word)
                                     wordExplanations.removeAll { $0.word.lowercased() == word }
-                                    sentenceExplanations.removeAll { $0.sentence.lowercased().contains(word) }
+                                    sentenceExplanations.removeAll { $0.sentence.lowercased() == word }
                                     saveLearnProgress()
                                 })
                             }

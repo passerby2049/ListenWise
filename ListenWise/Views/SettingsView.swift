@@ -22,6 +22,18 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: Binding(
+                    get: { preferences.appearance },
+                    set: { preferences.appearance = $0 }
+                )) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("Model") {
                 Picker("Default Model", selection: $defaultModel) {
                     if !availableModels.contains(defaultModel) {
