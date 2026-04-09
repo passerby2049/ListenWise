@@ -2,7 +2,7 @@
 See the LICENSE.txt file for this sample's licensing information.
 
 Abstract:
-File transcription code
+File transcription code — supports multiple transcription engines via TranscriptionEngine protocol.
 */
 
 import Foundation
@@ -12,9 +12,13 @@ import AVFoundation
 
 @Observable
 final class SpokenWordTranscriber {
+    // Legacy Apple Speech references (kept for backward compatibility)
     private var transcriber: SpeechTranscriber?
     private var analyzer: SpeechAnalyzer?
     private var recognizerTask: Task<(), Error>?
+
+    /// The active transcription engine.
+    private var engine: TranscriptionEngine?
 
     var story: Binding<Story>
     var recognitionLocale: Locale
@@ -22,6 +26,12 @@ final class SpokenWordTranscriber {
     var volatileTranscript: AttributedString = ""
     var finalizedTranscript: AttributedString = ""
     var finalizedLineCount: Int = 0
+
+    /// Download/preparation progress (0.0 - 1.0). Observed by UI.
+    var preparationProgress: Double = 0
+
+    /// Whether the engine is currently being prepared (downloading model, etc.)
+    var isPreparing: Bool = false
 
     static let defaultLocale = Locale(components: .init(languageCode: .english, script: nil, languageRegion: .unitedStates))
 
@@ -32,21 +42,15 @@ final class SpokenWordTranscriber {
 
     // MARK: - File Transcription
 
-    func transcribeFile(_ url: URL) async throws {
-        try await prepareAnalyzer()
+    func transcribeFile(_ url: URL, engineID: TranscriptionEngineID = .appleSpeech) async throws {
         story.url.wrappedValue = url
 
-        let videoExtensions = Set(["mp4", "mov", "m4v", "avi", "mkv"])
-        if videoExtensions.contains(url.pathExtension.lowercased()) {
-            try await transcribeVideoFile(url)
+        if engineID == .appleSpeech {
+            // Use the original Apple Speech path for full AttributedString timing support
+            try await transcribeWithAppleSpeech(url)
         } else {
-            let audioFile = try AVAudioFile(forReading: url)
-            let lastTime = try await analyzer?.analyzeSequence(from: audioFile)
-            if let lastTime {
-                try await analyzer?.finalizeAndFinish(through: lastTime)
-            } else {
-                await analyzer?.cancelAndFinishNow()
-            }
+            // Use the pluggable engine
+            try await transcribeWithEngine(url, engineID: engineID)
         }
 
         // Wait for recognizer task to finish processing all results
@@ -62,31 +66,73 @@ final class SpokenWordTranscriber {
         }
     }
 
-    private func transcribeVideoFile(_ url: URL) async throws {
-        let asset = AVURLAsset(url: url)
+    // MARK: - Engine-based Transcription
 
-        let videoDuration = try? await asset.load(.duration)
+    private func transcribeWithEngine(_ url: URL, engineID: TranscriptionEngineID) async throws {
+        let engine = engineID.makeEngine()
+        self.engine = engine
 
-        let tempURL = FileManager.default.temporaryDirectory
-            .appending(component: UUID().uuidString)
-            .appendingPathExtension("m4a")
-
-        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
-            throw TranscriptionError.audioFilePathNotFound
-        }
-        exportSession.outputURL = tempURL
-        exportSession.outputFileType = .m4a
-        // Ensure full duration is exported
-        exportSession.timeRange = CMTimeRange(start: .zero, duration: videoDuration ?? CMTime(seconds: 7200, preferredTimescale: 600))
-
-        await exportSession.export()
-        guard exportSession.status == .completed else {
-            throw TranscriptionError.audioFilePathNotFound
+        guard engine.isAvailable else {
+            throw TranscriptionError.failedToSetupRecognitionStream
         }
 
-        defer { try? FileManager.default.removeItem(at: tempURL) }
+        // Prepare (download model if needed)
+        isPreparing = true
+        preparationProgress = 0
+        do {
+            try await engine.prepare(locale: recognitionLocale) { [weak self] progress in
+                Task { @MainActor in
+                    self?.preparationProgress = progress
+                }
+            }
+        } catch {
+            isPreparing = false
+            throw error
+        }
+        isPreparing = false
 
-        let audioFile = try AVAudioFile(forReading: tempURL)
+        // Stream transcription results, collecting timing for subtitle cards
+        var subtitleCards: [(text: String, start: Double, end: Double)] = []
+        let stream = engine.transcribe(audioFileURL: url, locale: recognitionLocale)
+        for try await segment in stream {
+            if segment.isFinal {
+                finalizedTranscript += segment.text
+                volatileTranscript = ""
+                updateStoryWithNewText(withFinal: segment.text)
+                // Collect timing from engines that provide it (e.g. Whisper)
+                if let start = segment.startTime, let end = segment.endTime {
+                    let text = String(segment.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty {
+                        subtitleCards.append((text: text, start: start, end: end))
+                    }
+                }
+            } else {
+                volatileTranscript = segment.text
+                volatileTranscript.foregroundColor = .purple.opacity(0.4)
+            }
+        }
+        // Save subtitle cards from engine timing if available
+        if !subtitleCards.isEmpty {
+            story.savedSubtitleCards.wrappedValue = subtitleCards
+        }
+    }
+
+    // MARK: - Apple Speech Transcription (Original Path)
+
+    private func transcribeWithAppleSpeech(_ url: URL) async throws {
+        try await prepareAnalyzer()
+
+        let audioURL: URL
+        var tempFile: URL?
+        if videoFileExtensions.contains(url.pathExtension.lowercased()) {
+            audioURL = try await extractAudioFromVideo(url)
+            tempFile = audioURL
+        } else {
+            audioURL = url
+        }
+        defer { if let tempFile { try? FileManager.default.removeItem(at: tempFile) } }
+
+        let audioFile = try AVAudioFile(forReading: audioURL)
         let lastTime = try await analyzer?.analyzeSequence(from: audioFile)
         if let lastTime {
             try await analyzer?.finalizeAndFinish(through: lastTime)
@@ -95,7 +141,7 @@ final class SpokenWordTranscriber {
         }
     }
 
-    // MARK: - Setup
+    // MARK: - Setup (Apple Speech)
 
     private func prepareAnalyzer() async throws {
         let locale = await supported(locale: recognitionLocale) ? recognitionLocale : SpokenWordTranscriber.defaultLocale

@@ -80,8 +80,17 @@ struct SubtitleExporter {
             }
 
             let trimmed = currentText.trimmingCharacters(in: .whitespaces)
-            let sentenceEnders: Set<Character> = [".", "?", "!", "。", "？", "！"]
-            let sentenceEnd = trimmed.last.map { sentenceEnders.contains($0) } ?? false
+            let nonDotEnders: Set<Character> = ["?", "!", "。", "？", "！"]
+            let endsWithNonDot = trimmed.last.map { nonDotEnders.contains($0) } ?? false
+            // For period: only treat as sentence end if preceded by 2+ letter word
+            // (avoids splitting abbreviations like "U.S.", "Dr.", "Mr.")
+            let endsWithSentenceDot: Bool = {
+                guard trimmed.hasSuffix(".") else { return false }
+                let withoutDot = trimmed.dropLast()
+                let lastWord = withoutDot.split(separator: " ").last.map(String.init) ?? ""
+                return lastWord.count >= 2 && lastWord.allSatisfy(\.isLetter)
+            }()
+            let sentenceEnd = endsWithNonDot || endsWithSentenceDot
             if sentenceEnd || trimmed.count > 60 {
                 let s = currentStart ?? lastEnd
                 let e = currentEnd ?? (lastEnd + 3) // Estimate 3s if no end time
@@ -112,6 +121,33 @@ struct SubtitleExporter {
         cards.first { $0.start <= time && time < $0.end }?.text ?? ""
     }
 }
+
+// MARK: - Audio Extraction
+
+/// Extract audio track from a video file into a temporary m4a.
+func extractAudioFromVideo(_ videoURL: URL) async throws -> URL {
+    let asset = AVURLAsset(url: videoURL)
+    let duration = try? await asset.load(.duration)
+
+    let tempURL = FileManager.default.temporaryDirectory
+        .appending(component: UUID().uuidString)
+        .appendingPathExtension("m4a")
+
+    guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+        throw TranscriptionError.audioFilePathNotFound
+    }
+    session.outputURL = tempURL
+    session.outputFileType = .m4a
+    session.timeRange = CMTimeRange(start: .zero, duration: duration ?? CMTime(seconds: 7200, preferredTimescale: 600))
+
+    await session.export()
+    guard session.status == .completed else {
+        throw TranscriptionError.audioFilePathNotFound
+    }
+    return tempURL
+}
+
+let videoFileExtensions: Set<String> = ["mp4", "mov", "m4v", "avi", "mkv"]
 
 // MARK: - JSON Parsing Utility
 

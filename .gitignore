@@ -51,5 +51,8 @@ design-mockup.html
 mockup-*.html
 mockup.html
 
+# Documentation
+docs/
+
 # Claude Code
 .claude/

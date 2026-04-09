@@ -11,23 +11,39 @@ struct ContentView: View {
     @Environment(AppPreferences.self) private var preferences
     @State private var selection: Story?
     @State private var stories: [Story] = []
-    @State private var showingSettings = false
+
 
     var body: some View {
         NavigationSplitView {
-            List(stories, selection: $selection) { story in
-                NavigationLink(value: story) {
-                    StoryRowView(story: story)
-                }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        deleteStory(story)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(stories) { story in
+                        Button {
+                            selection = story
+                        } label: {
+                            StoryRowView(story: story)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(selection?.id == story.id ? preferences.accentColor.opacity(0.35) : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteStory(story)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             }
-            .listStyle(.sidebar)
             .navigationTitle("ListenWise")
             .toolbar {
                 ToolbarItem {
@@ -67,20 +83,16 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .sheet(isPresented: $showingSettings) {
-            NavigationStack {
-                SettingsView()
-                    .environment(preferences)
-            }
-            .frame(minWidth: 500, minHeight: 420)
-        }
         .onAppear {
             if stories.isEmpty {
                 stories = StoryStore.shared.loadAll()
             }
         }
         .onChange(of: stories) {
-            StoryStore.shared.save(stories)
+            let snapshot = stories
+            Task.detached(priority: .utility) {
+                StoryStore.shared.save(snapshot)
+            }
         }
     }
 
@@ -90,9 +102,7 @@ struct ContentView: View {
     var sidebarFooter: some View {
         VStack(spacing: 0) {
             Divider()
-            Button {
-                showingSettings = true
-            } label: {
+            SettingsLink {
                 HStack(spacing: 8) {
                     Image(systemName: "gearshape")
                     Text("Settings")

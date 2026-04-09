@@ -32,6 +32,7 @@ struct NativeVideoPlayer: NSViewRepresentable {
 
 struct TranscriptView: View {
     @Binding var story: Story
+    @Environment(AppPreferences.self) private var preferences
     @State var isImporting = false
     @State var isTranscribingFile = false
     @State var isShowingYouTubeDownload = false
@@ -196,7 +197,7 @@ struct TranscriptView: View {
                 // Update transcriber locale based on selected source language
                 speechTranscriber.recognitionLocale = SupportedLanguages.locale(for: story.sourceLanguage) ?? SpokenWordTranscriber.defaultLocale
                 Task {
-                    do { try await speechTranscriber.transcribeFile(url) }
+                    do { try await speechTranscriber.transcribeFile(url, engineID: preferences.selectedTranscriptionEngine) }
                     catch { print("could not transcribe file: \(error)") }
                     let originalCards = SubtitleExporter.subtitleCards(from: story.text)
                     if !originalCards.isEmpty {
@@ -219,7 +220,7 @@ struct TranscriptView: View {
             isTranscribingFile = true
             speechTranscriber.recognitionLocale = SupportedLanguages.locale(for: story.sourceLanguage) ?? SpokenWordTranscriber.defaultLocale
             Task {
-                do { try await speechTranscriber.transcribeFile(url) }
+                do { try await speechTranscriber.transcribeFile(url, engineID: preferences.selectedTranscriptionEngine) }
                 catch { print("could not transcribe file: \(error)") }
                 let originalCards = SubtitleExporter.subtitleCards(from: story.text)
                 if !originalCards.isEmpty {
@@ -416,10 +417,26 @@ struct TranscriptView: View {
     var transcribingView: some View {
         VStack(spacing: 20) {
             Spacer()
-            ProgressView()
-                .scaleEffect(1.5)
-            Text("Transcribing file...")
-                .font(.title3.bold())
+            if speechTranscriber.isPreparing {
+                // Model download / preparation phase
+                ProgressView(value: speechTranscriber.preparationProgress) {
+                    Text("Preparing model...")
+                        .font(.title3.bold())
+                }
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 300)
+                Text("\(Int(speechTranscriber.preparationProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView()
+                    .scaleEffect(1.5)
+                Text("Transcribing file...")
+                    .font(.title3.bold())
+            }
+            Text("Engine: \(preferences.selectedTranscriptionEngine.displayName)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if let url = story.url {
                 Text(url.lastPathComponent)
                     .font(.caption)
@@ -521,7 +538,7 @@ struct TranscriptView: View {
                                 Text(modeLabel)
                                     .font(.system(size: 11, weight: .bold))
                             }
-                            .foregroundStyle(showSubtitle ? Color.accentColor : Color.white.opacity(0.9))
+                            .foregroundStyle(showSubtitle ? preferences.accentColor : Color.white.opacity(0.9))
                             .frame(height: 36)
                             .padding(.horizontal, 12)
                             .background(
@@ -818,7 +835,7 @@ struct TranscriptView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white)
-                    .background(Color.accentColor)
+                    .background(preferences.accentColor)
                     .clipShape(Capsule())
                     .disabled(!story.isDone || cachedSubtitleCards.isEmpty)
                     .help("AI Reorganize — merge fragments into proper sentences")
@@ -1000,7 +1017,7 @@ struct TranscriptView: View {
             let s = Int(startTime) % 60
             Text(String(format: "%d:%02d", m, s))
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(isActive ? Color.accentColor : Color.gray)
+                .foregroundStyle(isActive ? preferences.accentColor : Color.gray)
                 .frame(width: 32, alignment: .trailing)
         }
         .buttonStyle(.plain)
@@ -1131,7 +1148,7 @@ struct TranscriptView: View {
                                     .font(.system(size: 12, weight: .semibold))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
-                                    .background(Color.accentColor)
+                                    .background(preferences.accentColor)
                                     .foregroundStyle(.white)
                                     .clipShape(Capsule())
                             }
@@ -1255,7 +1272,7 @@ struct TranscriptView: View {
                                 Text(msg.content)
                                     .font(.callout)
                                     .padding(10)
-                                    .background(Color.accentColor.opacity(0.12))
+                                    .background(preferences.accentColor.opacity(0.12))
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                             } else {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -1307,7 +1324,7 @@ struct TranscriptView: View {
                         .foregroundStyle(
                             chatInput.trimmingCharacters(in: .whitespaces).isEmpty
                                 ? Color.gray.opacity(0.4)
-                                : Color.accentColor
+                                : preferences.accentColor
                         )
                 }
                 .buttonStyle(.plain)
