@@ -57,6 +57,7 @@ class StoryStore {
             translation: nilIfEmpty(story.savedTranslation),
             chatMessages: story.savedChatMessages.isEmpty ? nil : story.savedChatMessages,
             youtubeURL: nilIfEmpty(story.youtubeURL),
+            youtubeStreamingURL: nilIfEmpty(story.youtubeStreamingURL),
             reorganizedCards: story.savedReorganizedCards.isEmpty ? nil : story.savedReorganizedCards.map {
                 ReorganizedCardData(text: $0.text, translation: $0.translation, start: $0.start, end: $0.end)
             },
@@ -118,6 +119,7 @@ class StoryStore {
         story.savedTranslation = data.translation ?? ""
         story.savedChatMessages = data.chatMessages ?? []
         story.youtubeURL = data.youtubeURL ?? ""
+        story.youtubeStreamingURL = data.youtubeStreamingURL ?? ""
         story.savedReorganizedCards = data.reorganizedCards?.map {
             (text: $0.text, zh: $0.translation, start: $0.start, end: $0.end)
         } ?? []
@@ -204,6 +206,7 @@ private struct StoryData: Codable {
     let translation: String?
     let chatMessages: [ChatMessage]?
     let youtubeURL: String?
+    let youtubeStreamingURL: String?
     let reorganizedCards: [ReorganizedCardData]?
     let sourceLanguage: String?
     let targetLanguage: String?

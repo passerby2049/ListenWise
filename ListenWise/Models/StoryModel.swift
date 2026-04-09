@@ -40,6 +40,8 @@ class Story: Identifiable {
     var savedChatMessages: [ChatMessage] = []
     /// YouTube URL for online playback (if downloaded from YouTube).
     var youtubeURL: String = ""
+    /// YouTube HLS streaming URL for direct HD playback via AVPlayer.
+    var youtubeStreamingURL: String = ""
     /// Reorganized subtitle cards (LLM-merged with proper sentence boundaries + translation).
     var savedReorganizedCards: [(text: String, translation: String, start: Double, end: Double)] = []
 
@@ -49,6 +51,7 @@ class Story: Identifiable {
     var targetLanguage: String = "中文"
 
     var sourceIsVideo: Bool {
+        if !youtubeURL.isEmpty { return true }
         guard let url else { return false }
         return Set(["mp4", "mov", "m4v", "avi", "mkv"]).contains(url.pathExtension.lowercased())
     }

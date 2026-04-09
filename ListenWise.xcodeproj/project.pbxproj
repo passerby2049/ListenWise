@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		612F2FC12F87E64900718785 /* YouTubeKit in Frameworks */ = {isa = PBXBuildFile; productRef = FA000002FAAA000000000002 /* YouTubeKit */; };
 		FA000001FAAA000000000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = FA000002FAAA000000000001 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
@@ -30,6 +31,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				612F2FC12F87E64900718785 /* YouTubeKit in Frameworks */,
 				FA000001FAAA000000000001 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -93,6 +95,7 @@
 			name = ListenWise;
 			packageProductDependencies = (
 				FA000002FAAA000000000001 /* FluidAudio */,
+				FA000002FAAA000000000002 /* YouTubeKit */,
 			);
 			productName = ListenWise;
 			productReference = 56177C7C2DA2E84500A2A2BB /* ListenWise.app */;
@@ -124,6 +127,7 @@
 			mainGroup = 56177C732DA2E84500A2A2BB;
 			packageReferences = (
 				FA000003FAAA000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				FA000003FAAA000000000002 /* XCRemoteSwiftPackageReference "YouTubeKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 56177C7D2DA2E84500A2A2BB /* Products */;
@@ -424,6 +428,14 @@
 				minimumVersion = 0.12.4;
 			};
 		};
+		FA000003FAAA000000000002 /* XCRemoteSwiftPackageReference "YouTubeKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/alexeichhorn/YouTubeKit.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -431,6 +443,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FA000003FAAA000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
+		};
+		FA000002FAAA000000000002 /* YouTubeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FA000003FAAA000000000002 /* XCRemoteSwiftPackageReference "YouTubeKit" */;
+			productName = YouTubeKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

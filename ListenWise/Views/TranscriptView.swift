@@ -11,6 +11,103 @@ import Speech
 import AVFoundation
 import AVKit
 import UniformTypeIdentifiers
+import WebKit
+
+// MARK: - YouTube Embed Player (WKWebView)
+
+struct YouTubeEmbedPlayer: NSViewRepresentable {
+    let videoID: String
+    var onTimeUpdate: ((Double) -> Void)?
+    var onWebViewReady: ((WKWebView) -> Void)?
+
+    class Coordinator: NSObject, WKNavigationDelegate {
+        var onTimeUpdate: ((Double) -> Void)?
+        var timer: Timer?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // Start polling YouTube player currentTime for subtitle sync
+            timer?.invalidate()
+            timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self, weak webView] _ in
+                guard let webView else { return }
+                webView.evaluateJavaScript("document.querySelector('video')?.currentTime ?? -1") { result, _ in
+                    if let time = result as? Double, time >= 0 {
+                        self?.onTimeUpdate?(time)
+                    }
+                }
+            }
+        }
+
+        deinit { timer?.invalidate() }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        let c = Coordinator()
+        c.onTimeUpdate = onTimeUpdate
+        return c
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.mediaTypesRequiringUserActionForPlayback = []
+
+        // Minimal CSS: hide YouTube chrome, force #movie_player to fill the viewport
+        let jsSource = """
+        (function() {
+            // Force dark theme attribute
+            document.documentElement.setAttribute('dark', '');
+            var css = `
+                html, body, ytd-app, #content, #page-manager, ytd-watch-flexy,
+                #columns, #primary, #primary-inner {
+                    margin:0!important; padding:0!important; overflow:hidden!important;
+                    background:#000!important; background-color:#000!important;
+                }
+                #masthead-container, #secondary, #below, #comments, #related,
+                ytd-masthead, #guide, tp-yt-app-drawer, ytd-mini-guide-renderer,
+                ytd-popup-container, #clarify-box, #panels, #ticker,
+                .ytp-paid-content-overlay, .ytp-chrome-top,
+                .ytp-cards-button, .ytp-ce-element { display:none!important; }
+                #movie_player, .html5-video-player {
+                    position:fixed!important; top:0!important; left:0!important;
+                    width:100vw!important; height:100vh!important;
+                    z-index:99999!important; background:#000!important;
+                }
+                .html5-video-container, video {
+                    position:absolute!important; left:0!important; top:0!important;
+                    width:100%!important; height:100%!important;
+                }
+                video { object-fit:contain!important; }
+                .ytp-chrome-bottom { opacity:0!important; transition:opacity .3s!important; }
+                .html5-video-player:hover .ytp-chrome-bottom { opacity:1!important; }
+            `;
+            function apply() {
+                if (!document.getElementById('yt-clean')) {
+                    var s = document.createElement('style');
+                    s.id = 'yt-clean';
+                    s.textContent = css;
+                    (document.head || document.documentElement).appendChild(s);
+                }
+            }
+            apply();
+            new MutationObserver(apply).observe(document.documentElement, {childList:true, subtree:true});
+        })();
+        """
+        config.userContentController.addUserScript(
+            WKUserScript(source: jsSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.underPageBackgroundColor = .black
+        webView.setValue(false, forKey: "drawsBackground")  // Prevent white flash in light mode
+        webView.navigationDelegate = context.coordinator
+
+        let watchURL = URL(string: "https://www.youtube.com/watch?v=\(videoID)")!
+        webView.load(URLRequest(url: watchURL))
+        DispatchQueue.main.async { onWebViewReady?(webView) }
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {}
+}
 
 // MARK: - Native AVPlayerView with fullscreen button
 
@@ -41,6 +138,7 @@ struct TranscriptView: View {
 
     // Playback (unified AVPlayer for both audio and video)
     @State var player: AVPlayer?
+    @State var youtubeWebView: WKWebView?  // WKWebView reference for YouTube seek
     @State var isPlaying = false
     @State var currentPlaybackTime = 0.0
     @State var currentLineIndex: Int? = nil
@@ -108,8 +206,13 @@ struct TranscriptView: View {
     }
 
     var sourceIsVideo: Bool {
+        if !story.youtubeURL.isEmpty { return true }
         guard let url = story.url else { return false }
         return Set(["mp4", "mov", "m4v", "avi", "mkv"]).contains(url.pathExtension.lowercased())
+    }
+
+    var youtubeVideoID: String? {
+        YouTubeHelper.extractVideoID(story.youtubeURL)
     }
 
     var body: some View {
@@ -212,7 +315,7 @@ struct TranscriptView: View {
             }
         }
         .sheet(isPresented: $isShowingYouTubeDownload) {
-            YouTubeDownloadView(downloadedURL: $youtubeDownloadedURL, youtubeSourceURL: $story.youtubeURL)
+            YouTubeDownloadView(downloadedURL: $youtubeDownloadedURL, youtubeSourceURL: $story.youtubeURL, youtubeStreamingURL: $story.youtubeStreamingURL)
         }
         .onChange(of: youtubeDownloadedURL) { _, newURL in
             guard let url = newURL else { return }
@@ -228,6 +331,11 @@ struct TranscriptView: View {
                     story.savedSubtitleCards = originalCards
                 }
                 isTranscribingFile = false
+                // Delete YouTube audio file after transcription — playback uses embedded web player
+                if !story.youtubeURL.isEmpty {
+                    try? FileManager.default.removeItem(at: url)
+                    print("[YouTube] Deleted transcribed audio: \(url.lastPathComponent)")
+                }
                 StoryStore.shared.save(story)
             }
         }
@@ -267,8 +375,38 @@ struct TranscriptView: View {
             let accessing = url.startAccessingSecurityScopedResource()
             if accessing { securityScopedURL = url }
         }
-        let p = AVPlayer(url: url)
+
+        // For YouTube videos: video + audio plays via embedded WKWebView.
+        // No AVPlayer needed — subtitles are driven by JS time polling.
+        if !story.youtubeURL.isEmpty {
+            // Just load subtitle cards, no AVPlayer
+            if !story.savedSubtitleCards.isEmpty {
+                cachedSubtitleCards = story.savedSubtitleCards
+            } else {
+                let cards = SubtitleExporter.subtitleCards(from: story.text)
+                cachedSubtitleCards = cards.isEmpty ? story.savedSubtitleCards : cards
+                if !cachedSubtitleCards.isEmpty {
+                    story.savedSubtitleCards = cachedSubtitleCards
+                }
+            }
+            // Get duration from local audio file
+            Task {
+                if let d = try? await AVURLAsset(url: url).load(.duration) {
+                    duration = CMTimeGetSeconds(d)
+                }
+            }
+            return
+        }
+
+        let playerItem = AVPlayerItem(url: url)
+        let p = AVPlayer(playerItem: playerItem)
         player = p
+        finishPlayerSetup(player: p, localURL: url)
+    }
+
+    /// Shared player setup — loads subtitle cards, sets up duration and time observer.
+    /// Called from setupPlayer() for both synchronous (local file) and async (YouTube) paths.
+    private func finishPlayerSetup(player p: AVPlayer, localURL url: URL) {
         // Use timing-based cards if available, otherwise fall back to saved cards
         // Prefer saved cards first to avoid blocking the main thread from slow AttributedString parsing
         if !story.savedSubtitleCards.isEmpty {
@@ -281,7 +419,7 @@ struct TranscriptView: View {
             }
         }
 
-        // Get duration
+        // Get duration (use local file for reliable duration, HLS may not report it)
         Task {
             if let d = try? await AVURLAsset(url: url).load(.duration) {
                 duration = CMTimeGetSeconds(d)
@@ -333,7 +471,28 @@ struct TranscriptView: View {
         return cachedSubtitleCards
     }
 
+    /// Called by YouTubeEmbedPlayer's JS polling to update subtitles from YouTube's playback time.
+    func updateSubtitleFromYouTube(time t: Double) {
+        let cards = activeSubtitleCards
+        let newIndex = cards.firstIndex { $0.start <= t && t < $0.end }
+        if newIndex != currentLineIndex {
+            currentLineIndex = newIndex
+        }
+        currentSubtitleText = newIndex.map { cards[$0].text } ?? ""
+        if showReorganized && !reorganizedCards.isEmpty, let idx = newIndex, idx < reorganizedCards.count {
+            currentSubtitleTranslation = reorganizedCards[idx].translation
+        } else {
+            currentSubtitleTranslation = ""
+        }
+    }
+
     func togglePlayback() {
+        if youtubeWebView != nil {
+            // YouTube: toggle via JS
+            youtubeWebView?.evaluateJavaScript("var v=document.querySelector('video');if(v){v.paused?v.play():v.pause()}")
+            isPlaying.toggle()
+            return
+        }
         guard let p = player else { return }
         if isPlaying {
             p.pause()
@@ -344,7 +503,12 @@ struct TranscriptView: View {
     }
 
     func seek(to time: Double) {
-        player?.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        if let webView = youtubeWebView {
+            // Seek YouTube web player via JS
+            webView.evaluateJavaScript("var v=document.querySelector('video');if(v){v.currentTime=\(time);v.play()}")
+        } else {
+            player?.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
     }
 
     var timeString: String {
@@ -465,7 +629,16 @@ struct TranscriptView: View {
     @ViewBuilder
     var videoPlayerWithSubtitle: some View {
         ZStack {
-            if let p = player {
+            if let vid = youtubeVideoID {
+                // YouTube: use embedded web player (HD, no codec/throttle issues)
+                YouTubeEmbedPlayer(videoID: vid, onTimeUpdate: { time in
+                    updateSubtitleFromYouTube(time: time)
+                }, onWebViewReady: { webView in
+                    youtubeWebView = webView
+                })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+            } else if let p = player {
                 NativeVideoPlayer(player: p)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -841,6 +1014,29 @@ struct TranscriptView: View {
                     .help("AI Reorganize — merge fragments into proper sentences")
                 }
 
+                // Copy transcript text
+                Button {
+                    let text: String
+                    if showReorganized && !reorganizedCards.isEmpty {
+                        text = reorganizedCards.map(\.text).joined(separator: "\n")
+                    } else {
+                        text = cachedSubtitleCards.map(\.text).joined(separator: "\n")
+                    }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .background(Color.secondary.opacity(0.18))
+                .clipShape(Capsule())
+                .disabled(cachedSubtitleCards.isEmpty)
+                .help("Copy transcript text")
+
                 Spacer()
             }
             .padding(.vertical, 8)
@@ -1005,7 +1201,12 @@ struct TranscriptView: View {
         let cards = activeSubtitleCards
         guard index < cards.count else { return }
         seek(to: cards[index].start)
-        if !isPlaying { togglePlayback() }
+        // For YouTube, seek() already includes v.play() — just update state
+        if youtubeWebView != nil {
+            isPlaying = true
+        } else if !isPlaying {
+            togglePlayback()
+        }
     }
 
     @ViewBuilder
