@@ -108,6 +108,7 @@ extension TranscriptView {
             - Each entry must be exactly ONE complete sentence. Split at every sentence-ending punctuation (. ? ! 。？！ etc.).
             - Every index must appear exactly once, in order. Indices are 0-based for this batch only.
             - Do NOT summarize. Keep the original meaning word-for-word.
+            - Fix proper nouns and names that were misrecognized by speech-to-text. Use context to infer the correct spelling (e.g. "Bideen" → "Biden", "Ukrane" → "Ukraine").
             - "target" is the \(tgtLang) translation of the "text" field.
             - IMPORTANT: If the last few cards don't form a complete sentence, do NOT include them. Only output complete sentences. Leave trailing incomplete fragments out.
 

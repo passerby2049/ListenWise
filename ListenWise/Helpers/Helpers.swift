@@ -91,7 +91,14 @@ struct SubtitleExporter {
                 return lastWord.count >= 2 && lastWord.allSatisfy(\.isLetter)
             }()
             let sentenceEnd = endsWithNonDot || endsWithSentenceDot
-            if sentenceEnd || trimmed.count > 60 {
+            // For overLength: also avoid splitting right after an abbreviation like "p." or "U."
+            let endsWithAbbreviation: Bool = {
+                let words = trimmed.split(separator: " ")
+                guard let last = words.last else { return false }
+                return last.hasSuffix(".") && last.count <= 2
+            }()
+            let overLength = trimmed.count > 60 && currentText.hasSuffix(" ") && !endsWithAbbreviation
+            if sentenceEnd || overLength {
                 let s = currentStart ?? lastEnd
                 let e = currentEnd ?? (lastEnd + 3) // Estimate 3s if no end time
                 groups.append((trimmed, s, e))

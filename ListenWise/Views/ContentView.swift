@@ -141,6 +141,10 @@ struct ContentView: View {
 
     func deleteStory(_ story: Story) {
         if selection?.id == story.id { selection = nil }
+        // Delete downloaded YouTube video file
+        if !story.youtubeURL.isEmpty, let url = story.url {
+            try? FileManager.default.removeItem(at: url)
+        }
         stories.removeAll { $0.id == story.id }
     }
 }
