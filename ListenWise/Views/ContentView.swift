@@ -163,7 +163,7 @@ private struct StoryRowView: View {
 
     var metaText: String {
         if !story.isDone { return "Transcribing..." }
-        let type = !story.youtubeURL.isEmpty ? "YouTube" : (story.sourceIsVideo ? "Video" : "Audio")
+        let type = story.isLiveStream ? "Live" : (!story.youtubeURL.isEmpty ? "YouTube" : (story.sourceIsVideo ? "Video" : "Audio"))
         // Estimate duration from last subtitle card's end time
         if let lastEnd = story.savedSubtitleCards.last?.end, lastEnd > 0 {
             let total = Int(lastEnd)
@@ -177,6 +177,7 @@ private struct StoryRowView: View {
     }
 
     var icon: String {
+        if story.isLiveStream { return "antenna.radiowaves.left.and.right" }
         if !story.youtubeURL.isEmpty { return "play.rectangle.fill" }
         return story.sourceIsVideo ? "film" : "waveform"
     }

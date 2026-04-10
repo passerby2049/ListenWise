@@ -131,10 +131,10 @@ final class FluidAudioEngine: TranscriptionEngine {
 
     /// Group token timings into sentence-level segments, splitting at sentence-ending punctuation.
     /// Each sentence carries the start time of its first token and end time of its last token.
-    private static func groupTimingsIntoSentences(_ timings: [TokenTiming]) -> [(text: String, start: Double, end: Double)] {
+    private static func groupTimingsIntoSentences(_ timings: [TokenTiming]) -> [SubtitleCard] {
         guard !timings.isEmpty else { return [] }
 
-        var sentences: [(text: String, start: Double, end: Double)] = []
+        var sentences: [SubtitleCard] = []
         let sentenceEnders: Set<Character> = [".", "?", "!", "。", "？", "！"]
         var currentText = ""
         var startTime: Double?
@@ -148,7 +148,7 @@ final class FluidAudioEngine: TranscriptionEngine {
             let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
             if let lastChar = trimmed.last, sentenceEnders.contains(lastChar) {
                 if !trimmed.isEmpty {
-                    sentences.append((text: trimmed, start: startTime ?? 0, end: endTime))
+                    sentences.append(SubtitleCard(text: trimmed, start: startTime ?? 0, end: endTime))
                 }
                 currentText = ""
                 startTime = nil
@@ -158,7 +158,7 @@ final class FluidAudioEngine: TranscriptionEngine {
         // Remaining text
         let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            sentences.append((text: trimmed, start: startTime ?? 0, end: endTime))
+            sentences.append(SubtitleCard(text: trimmed, start: startTime ?? 0, end: endTime))
         }
 
         return sentences

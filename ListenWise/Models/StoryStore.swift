@@ -44,13 +44,10 @@ class StoryStore {
             urlPath: story.url?.path,
             subtitleCards: {
                 let fromText = SubtitleExporter.subtitleCards(from: story.text)
-                let cards = fromText.isEmpty ? story.savedSubtitleCards : fromText
-                return cards.map { SubtitleCard(text: $0.text, start: $0.start, end: $0.end) }
+                return fromText.isEmpty ? story.savedSubtitleCards : fromText
             }(),
             fixedTranscript: nilIfEmpty(story.savedFixedTranscript),
-            fixedSubtitleCards: story.savedFixedSubtitleCards.isEmpty ? nil : story.savedFixedSubtitleCards.map {
-                SubtitleCard(text: $0.text, start: $0.start, end: $0.end)
-            },
+            fixedSubtitleCards: story.savedFixedSubtitleCards.isEmpty ? nil : story.savedFixedSubtitleCards,
             markedWords: story.savedMarkedWords.isEmpty ? nil : Array(story.savedMarkedWords),
             wordLearningResponse: nilIfEmpty(story.savedWordLearningResponse),
             sentenceLearningResponse: nilIfEmpty(story.savedSentenceLearningResponse),
@@ -58,17 +55,19 @@ class StoryStore {
             chatMessages: story.savedChatMessages.isEmpty ? nil : story.savedChatMessages,
             youtubeURL: nilIfEmpty(story.youtubeURL),
             youtubeStreamingURL: nilIfEmpty(story.youtubeStreamingURL),
-            reorganizedCards: story.savedReorganizedCards.isEmpty ? nil : story.savedReorganizedCards.map {
-                ReorganizedCardData(text: $0.text, translation: $0.translation, start: $0.start, end: $0.end)
-            },
+            reorganizedCards: story.savedReorganizedCards.isEmpty ? nil : story.savedReorganizedCards,
             sourceLanguage: story.sourceLanguage,
-            targetLanguage: story.targetLanguage
+            targetLanguage: story.targetLanguage,
+            isLiveStream: story.isLiveStream ? true : nil,
+            liveSegments: story.savedLiveSegments.isEmpty ? nil : story.savedLiveSegments
         )
         let file = storageDir.appendingPathComponent("\(story.id.uuidString).json")
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .prettyPrinted
-        if let jsonData = try? encoder.encode(data) {
-            try? jsonData.write(to: file, options: .atomic)
+        DispatchQueue.global(qos: .utility).async {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            if let jsonData = try? encoder.encode(data) {
+                try? jsonData.write(to: file, options: .atomic)
+            }
         }
     }
 
@@ -106,13 +105,9 @@ class StoryStore {
         }
 
         // Restore all learning data
-        story.savedSubtitleCards = data.subtitleCards?.map {
-            (text: $0.text, start: $0.start, end: $0.end)
-        } ?? []
+        story.savedSubtitleCards = data.subtitleCards ?? []
         story.savedFixedTranscript = data.fixedTranscript ?? ""
-        story.savedFixedSubtitleCards = data.fixedSubtitleCards?.map {
-            (text: $0.text, start: $0.start, end: $0.end)
-        } ?? []
+        story.savedFixedSubtitleCards = data.fixedSubtitleCards ?? []
         story.savedMarkedWords = Set(data.markedWords ?? [])
         story.savedWordLearningResponse = data.wordLearningResponse ?? ""
         story.savedSentenceLearningResponse = data.sentenceLearningResponse ?? ""
@@ -120,11 +115,11 @@ class StoryStore {
         story.savedChatMessages = data.chatMessages ?? []
         story.youtubeURL = data.youtubeURL ?? ""
         story.youtubeStreamingURL = data.youtubeStreamingURL ?? ""
-        story.savedReorganizedCards = data.reorganizedCards?.map {
-            (text: $0.text, zh: $0.translation, start: $0.start, end: $0.end)
-        } ?? []
+        story.savedReorganizedCards = data.reorganizedCards ?? []
         story.sourceLanguage = data.sourceLanguage ?? "English"
         story.targetLanguage = data.targetLanguage ?? "中文"
+        story.isLiveStream = data.isLiveStream ?? false
+        story.savedLiveSegments = data.liveSegments ?? []
 
         return story
     }
@@ -207,20 +202,9 @@ private struct StoryData: Codable {
     let chatMessages: [ChatMessage]?
     let youtubeURL: String?
     let youtubeStreamingURL: String?
-    let reorganizedCards: [ReorganizedCardData]?
+    let reorganizedCards: [ReorganizedCard]?
     let sourceLanguage: String?
     let targetLanguage: String?
-}
-
-private struct SubtitleCard: Codable {
-    let text: String
-    let start: Double
-    let end: Double
-}
-
-private struct ReorganizedCardData: Codable {
-    let text: String
-    let translation: String
-    let start: Double
-    let end: Double
+    let isLiveStream: Bool?
+    let liveSegments: [LiveSegment]?
 }

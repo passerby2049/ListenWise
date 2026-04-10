@@ -13,6 +13,7 @@ import AVKit
 import UniformTypeIdentifiers
 import WebKit
 
+
 // MARK: - YouTube Embed Player (WKWebView)
 
 struct YouTubeEmbedPlayer: NSViewRepresentable {
@@ -129,12 +130,18 @@ struct NativeVideoPlayer: NSViewRepresentable {
 
 struct TranscriptView: View {
     @Binding var story: Story
-    @Environment(AppPreferences.self) private var preferences
+    @Environment(AppPreferences.self) var preferences
     @State var isImporting = false
     @State var isTranscribingFile = false
     @State var isShowingYouTubeDownload = false
+    @State var isShowingLiveStreamInput = false
+    @State var liveStreamURLText = ""
     @State var youtubeDownloadedURL: URL?
     @State var speechTranscriber: SpokenWordTranscriber
+
+    // Live transcription (ScreenCaptureKit + Apple Speech)
+    @StateObject var liveTranscriber = LiveTranscriber()
+    @State var liveTranslateEnabled = true
 
     // Playback (unified AVPlayer for both audio and video)
     @State var player: AVPlayer?
@@ -143,15 +150,15 @@ struct TranscriptView: View {
     @State var currentPlaybackTime = 0.0
     @State var currentLineIndex: Int? = nil
     @State var videoHeight: CGFloat = 350
-    @State private var isDraggingVideo = false
-    @State private var dragStartY: CGFloat = 0
-    @State private var dragStartHeight: CGFloat = 0
+    @State var isDraggingVideo = false
+    @State var dragStartY: CGFloat = 0
+    @State var dragStartHeight: CGFloat = 0
     @State var currentSubtitleText: String = ""
     @State var currentSubtitleTranslation: String = ""
     @State var duration = 0.0
-    @State var cachedSubtitleCards: [(text: String, start: Double, end: Double)] = []
-    @State private var timeObserver: Any?
-    @State private var securityScopedURL: URL?
+    @State var cachedSubtitleCards: [SubtitleCard] = []
+    @State var timeObserver: Any?
+    @State var securityScopedURL: URL?
 
     // Translation
     @State var translatedText: String = ""
@@ -161,7 +168,7 @@ struct TranscriptView: View {
     }
 
     // Reorganized transcript (LLM-merged sentence boundaries)
-    @State var reorganizedCards: [(text: String, translation: String, start: Double, end: Double)] = []
+    @State var reorganizedCards: [ReorganizedCard] = []
     @State var isReorganizing: Bool = false
     @State var reorganizeProgress: String = ""
     @State var showReorganized: Bool = false
@@ -184,16 +191,16 @@ struct TranscriptView: View {
     @State var sentenceExplanations: [SentenceExplanation] = []
     @State var queriedWords: Set<String> = []  // Words already queried
     @State var isLoadingWordHelp: Bool = false
-    @State private var wordHelpTask: Task<Void, Never>?
-    @State private var fixTask: Task<Void, Never>?
-    @State private var translateTask: Task<Void, Never>?
+    @State var wordHelpTask: Task<Void, Never>?
+    @State var fixTask: Task<Void, Never>?
+    @State var translateTask: Task<Void, Never>?
 
     // Chat
     @State var chatMessages: [ChatMessage] = []
     @State var chatInput: String = ""
     @State var vocabScrollTarget: String? = nil
     @State var isChatting: Bool = false
-    @State private var chatTask: Task<Void, Never>?
+    @State var chatTask: Task<Void, Never>?
 
     // Inspector (right panel)
     @State var showingInspector: Bool = true
@@ -274,14 +281,23 @@ struct TranscriptView: View {
                 }
             }
             chatMessages = story.savedChatMessages
+            // Restore live segments
+            if story.isLiveStream && !story.savedLiveSegments.isEmpty {
+                liveTranscriber.segments = story.savedLiveSegments
+                liveTranscriber.confirmedText = story.savedLiveSegments.map(\.source).joined(separator: "\n")
+            }
         }
         .onDisappear {
+            // Save live transcription
+            saveLiveSegments()
             player?.pause()
             if let token = timeObserver {
                 player?.removeTimeObserver(token)
                 timeObserver = nil
             }
             player = nil
+            youtubeWebView?.evaluateJavaScript("document.querySelector('video')?.pause()")
+            youtubeWebView = nil
             securityScopedURL?.stopAccessingSecurityScopedResource()
         }
         .fileImporter(
@@ -366,160 +382,6 @@ struct TranscriptView: View {
         }
     }
 
-    // MARK: - Player Setup
-
-    func setupPlayer() {
-        guard story.isDone, let url = story.url, player == nil else { return }
-        // Re-acquire security-scoped access for restored URLs
-        if securityScopedURL == nil {
-            let accessing = url.startAccessingSecurityScopedResource()
-            if accessing { securityScopedURL = url }
-        }
-
-        // For YouTube videos: video + audio plays via embedded WKWebView.
-        // No AVPlayer needed — subtitles are driven by JS time polling.
-        if !story.youtubeURL.isEmpty {
-            // Just load subtitle cards, no AVPlayer
-            if !story.savedSubtitleCards.isEmpty {
-                cachedSubtitleCards = story.savedSubtitleCards
-            } else {
-                let cards = SubtitleExporter.subtitleCards(from: story.text)
-                cachedSubtitleCards = cards.isEmpty ? story.savedSubtitleCards : cards
-                if !cachedSubtitleCards.isEmpty {
-                    story.savedSubtitleCards = cachedSubtitleCards
-                }
-            }
-            // Get duration from local audio file
-            Task {
-                if let d = try? await AVURLAsset(url: url).load(.duration) {
-                    duration = CMTimeGetSeconds(d)
-                }
-            }
-            return
-        }
-
-        let playerItem = AVPlayerItem(url: url)
-        let p = AVPlayer(playerItem: playerItem)
-        player = p
-        finishPlayerSetup(player: p, localURL: url)
-    }
-
-    /// Shared player setup — loads subtitle cards, sets up duration and time observer.
-    /// Called from setupPlayer() for both synchronous (local file) and async (YouTube) paths.
-    private func finishPlayerSetup(player p: AVPlayer, localURL url: URL) {
-        // Use timing-based cards if available, otherwise fall back to saved cards
-        // Prefer saved cards first to avoid blocking the main thread from slow AttributedString parsing
-        if !story.savedSubtitleCards.isEmpty {
-            cachedSubtitleCards = story.savedSubtitleCards
-        } else {
-            let cards = SubtitleExporter.subtitleCards(from: story.text)
-            cachedSubtitleCards = cards.isEmpty ? story.savedSubtitleCards : cards
-            if !cachedSubtitleCards.isEmpty {
-                story.savedSubtitleCards = cachedSubtitleCards
-            }
-        }
-
-        // Get duration (use local file for reliable duration, HLS may not report it)
-        Task {
-            if let d = try? await AVURLAsset(url: url).load(.duration) {
-                duration = CMTimeGetSeconds(d)
-            }
-        }
-
-        let interval = CMTime(seconds: 0.3, preferredTimescale: 600)
-        let isVideo = sourceIsVideo
-        timeObserver = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [self] time in
-            let t = time.seconds
-
-            // Only update currentPlaybackTime for audio mode (slider/time display).
-            // In video mode the native player has its own controls, so skip to avoid
-            // unnecessary re-renders that cause scroll lag in the learning panel.
-            if !isVideo {
-                currentPlaybackTime = t
-            }
-
-            let cards = activeSubtitleCards
-            let newIndex = cards.firstIndex { $0.start <= t && t < $0.end }
-            if newIndex != currentLineIndex {
-                currentLineIndex = newIndex
-                // Auto-scroll vocab panel to first marked word in current subtitle
-                if let idx = newIndex, inspectorTab == .vocab, !markedWords.isEmpty {
-                    let lineText = cards[idx].text.lowercased()
-                    if let firstMatch = markedWords.sorted().first(where: { lineText.contains($0) }) {
-                        vocabScrollTarget = firstMatch
-                    }
-                }
-            }
-
-            if isVideo {
-                currentSubtitleText = newIndex.map { cards[$0].text } ?? ""
-                // Get translation from reorganized cards if available
-                if showReorganized && !reorganizedCards.isEmpty, let idx = newIndex, idx < reorganizedCards.count {
-                    currentSubtitleTranslation = reorganizedCards[idx].translation
-                } else {
-                    currentSubtitleTranslation = ""
-                }
-            }
-        }
-    }
-
-    /// Active subtitle cards — prefer reorganized, then cached original.
-    var activeSubtitleCards: [(text: String, start: Double, end: Double)] {
-        if showReorganized && !reorganizedCards.isEmpty {
-            return reorganizedCards.map { (text: $0.text, start: $0.start, end: $0.end) }
-        }
-        return cachedSubtitleCards
-    }
-
-    /// Called by YouTubeEmbedPlayer's JS polling to update subtitles from YouTube's playback time.
-    func updateSubtitleFromYouTube(time t: Double) {
-        let cards = activeSubtitleCards
-        let newIndex = cards.firstIndex { $0.start <= t && t < $0.end }
-        if newIndex != currentLineIndex {
-            currentLineIndex = newIndex
-        }
-        currentSubtitleText = newIndex.map { cards[$0].text } ?? ""
-        if showReorganized && !reorganizedCards.isEmpty, let idx = newIndex, idx < reorganizedCards.count {
-            currentSubtitleTranslation = reorganizedCards[idx].translation
-        } else {
-            currentSubtitleTranslation = ""
-        }
-    }
-
-    func togglePlayback() {
-        if youtubeWebView != nil {
-            // YouTube: toggle via JS
-            youtubeWebView?.evaluateJavaScript("var v=document.querySelector('video');if(v){v.paused?v.play():v.pause()}")
-            isPlaying.toggle()
-            return
-        }
-        guard let p = player else { return }
-        if isPlaying {
-            p.pause()
-        } else {
-            p.play()
-        }
-        isPlaying.toggle()
-    }
-
-    func seek(to time: Double) {
-        if let webView = youtubeWebView {
-            // Seek YouTube web player via JS
-            webView.evaluateJavaScript("var v=document.querySelector('video');if(v){v.currentTime=\(time);v.play()}")
-        } else {
-            player?.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        }
-    }
-
-    var timeString: String {
-        let fmt: (Double) -> String = { t in
-            let m = Int(t) / 60
-            let s = Int(t) % 60
-            return String(format: "%d:%02d", m, s)
-        }
-        return "\(fmt(currentPlaybackTime)) / \(fmt(duration))"
-    }
-
     // MARK: - Import Prompt (no file yet)
 
     @ViewBuilder
@@ -570,9 +432,19 @@ struct TranscriptView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+
+                Button { isShowingLiveStreamInput = true } label: {
+                    Label("Live", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .tint(.red)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $isShowingLiveStreamInput) {
+            liveStreamInputSheet
+        }
     }
 
     // MARK: - Transcribing View
@@ -643,35 +515,24 @@ struct TranscriptView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            // Subtitle overlay
-            if showSubtitle {
-                let subtitleContent: String? = {
+            // Subtitle overlay — unified for both live and normal modes
+            if liveTranscriber.isRunning, let last = liveTranscriber.segments.last {
+                SubtitleOverlay(source: last.source, translation: last.translation)
+            } else if showSubtitle {
+                let src: String = {
                     switch subtitleMode {
-                    case .source:
-                        return currentSubtitleText.isEmpty ? nil : currentSubtitleText
-                    case .target:
-                        return currentSubtitleTranslation.isEmpty ? nil : currentSubtitleTranslation
-                    case .both:
-                        if currentSubtitleText.isEmpty { return nil }
-                        if currentSubtitleTranslation.isEmpty { return currentSubtitleText }
-                        return currentSubtitleText + "\n" + currentSubtitleTranslation
+                    case .source, .both: return currentSubtitleText
+                    case .target: return ""
                     }
                 }()
-
-                if let content = subtitleContent {
-                    VStack {
-                        Spacer()
-                        Text(content)
-                            .font(.title3.bold())
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .padding(.bottom, 48)
-                            .padding(.horizontal, 90)
+                let tgt: String = {
+                    switch subtitleMode {
+                    case .source: return ""
+                    case .target, .both: return currentSubtitleTranslation
                     }
+                }()
+                if !src.isEmpty || !tgt.isEmpty {
+                    SubtitleOverlay(source: src, translation: tgt)
                 }
             }
 
@@ -783,8 +644,12 @@ struct TranscriptView: View {
                 Divider()
             }
 
-            // Transcript area
-            transcriptTabView
+            // Transcript area — live mode vs normal mode
+            if isLiveMode {
+                liveTranscriptArea
+            } else {
+                normalTranscriptArea
+            }
         }
     }
 
@@ -890,385 +755,6 @@ struct TranscriptView: View {
     }
 
     // MARK: - Transcript Text (shared between video & audio)
-
-    /// The lines to display — must match activeSubtitleCards 1:1 for correct timestamp mapping.
-    // MARK: - Transcript Tab View
-
-    @ViewBuilder
-    var transcriptTabView: some View {
-        VStack(spacing: 0) {
-            // Control bar — transcript tabs + reorganize controls
-            HStack(spacing: 12) {
-                Spacer()
-
-                // Original / Bilingual toggle
-                HStack(spacing: 2) {
-                    ForEach(TranscriptTab.allCases, id: \.self) { tab in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { transcriptTab = tab }
-                            // Re-trigger scroll to current line after tab switch
-                            if let idx = currentLineIndex {
-                                let saved = idx
-                                currentLineIndex = nil
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    currentLineIndex = saved
-                                }
-                            }
-                        } label: {
-                            Text(tab.rawValue)
-                                .font(.system(size: 11, weight: transcriptTab == tab ? .semibold : .medium))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 4)
-                                .background(
-                                    transcriptTab == tab
-                                        ? AnyShapeStyle(.background)
-                                        : AnyShapeStyle(.clear)
-                                )
-                                .clipShape(Capsule())
-                                .shadow(color: transcriptTab == tab ? Color.black.opacity(0.1) : .clear, radius: 1, y: 1)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(transcriptTab == tab ? .primary : .secondary)
-                        .disabled(tab == .bilingual && !showReorganized)
-                        .opacity(tab == .bilingual && !showReorganized ? 0.4 : 1)
-                    }
-                }
-                .padding(2)
-                .background(Color.secondary.opacity(0.18))
-                .clipShape(Capsule())
-
-                Divider().frame(height: 18)
-
-                // Raw / AI Reorganized toggle (pill style)
-                HStack(spacing: 2) {
-                    ForEach([(false, "Raw"), (true, "AI Reorganized")], id: \.0) { value, label in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showReorganized = value
-                                if !value && transcriptTab == .bilingual {
-                                    transcriptTab = .original
-                                }
-                                if value && reorganizedCards.isEmpty && !isReorganizing {
-                                    fixTask = Task { await reorganizeTranscript() }
-                                }
-                                // Re-trigger scroll to current line
-                                if let idx = currentLineIndex {
-                                    let saved = idx
-                                    currentLineIndex = nil
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        currentLineIndex = saved
-                                    }
-                                }
-                            }
-                        } label: {
-                            Text(label)
-                                .font(.system(size: 11, weight: showReorganized == value ? .semibold : .medium))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 4)
-                                .background(
-                                    showReorganized == value
-                                        ? AnyShapeStyle(.background)
-                                        : AnyShapeStyle(.clear)
-                                )
-                                .clipShape(Capsule())
-                                .shadow(color: showReorganized == value ? Color.black.opacity(0.1) : .clear, radius: 1, y: 1)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(showReorganized == value ? .primary : .secondary)
-                    }
-                }
-                .padding(2)
-                .background(Color.secondary.opacity(0.18))
-                .clipShape(Capsule())
-                .disabled(!story.isDone)
-
-                // AI Reorganize button (pill style)
-                if isReorganizing {
-                    Button {
-                        fixTask?.cancel()
-                        isReorganizing = false
-                    } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 5)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-                    .background(Color.red.opacity(0.15))
-                    .clipShape(Capsule())
-                } else {
-                    Button {
-                        fixTask = Task { await reorganizeTranscript() }
-                    } label: {
-                        Label("AI Reorganize", systemImage: "wand.and.stars")
-                            .font(.system(size: 11, weight: .semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 5)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.white)
-                    .background(preferences.accentColor)
-                    .clipShape(Capsule())
-                    .disabled(!story.isDone || cachedSubtitleCards.isEmpty)
-                    .help("AI Reorganize — merge fragments into proper sentences")
-                }
-
-                // Copy transcript text
-                Button {
-                    let text: String
-                    if showReorganized && !reorganizedCards.isEmpty {
-                        text = reorganizedCards.map(\.text).joined(separator: "\n")
-                    } else {
-                        text = cachedSubtitleCards.map(\.text).joined(separator: "\n")
-                    }
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 11))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .background(Color.secondary.opacity(0.18))
-                .clipShape(Capsule())
-                .disabled(cachedSubtitleCards.isEmpty)
-                .help("Copy transcript text")
-
-                Spacer()
-            }
-            .padding(.vertical, 8)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    if transcriptTab == .original {
-                        transcriptTextView(proxy: proxy)
-                            .padding(20)
-                    } else {
-                        translationTextView(proxy: proxy)
-                            .padding(20)
-                    }
-                }
-                .clipped()
-            }
-        }
-        .onChange(of: transcriptTab) { _, newTab in
-            if newTab == .bilingual && translationPairs.isEmpty && !isTranslatingLines {
-                Task { await translateByLines() }
-            }
-        }
-    }
-
-    @ViewBuilder
-    func translationTextView(proxy: ScrollViewProxy) -> some View {
-        LazyVStack(alignment: .leading, spacing: 16) {
-            // Use reorganized cards if available (they have zh translations)
-            if showReorganized && !reorganizedCards.isEmpty {
-                let hasTranslation = reorganizedCards.contains { !$0.translation.isEmpty }
-                if !hasTranslation {
-                    HStack {
-                        Text("Reorganize with translation first")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button {
-                            // Re-reorganize to get translations
-                            reorganizedCards = []
-                            fixTask = Task { await reorganizeTranscript() }
-                        } label: {
-                            Label("Reorganize", systemImage: "wand.and.stars")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-
-                let active = currentLineIndex
-                ForEach(reorganizedCards.indices, id: \.self) { i in
-                    HStack(alignment: .top, spacing: 16) {
-                        timestampButton(index: i, isActive: i == active, startTime: reorganizedCards[i].start)
-                            .padding(.top, 3)
-                        VStack(alignment: .leading, spacing: 6) {
-                            WordFlowView(text: reorganizedCards[i].text, markedWords: $markedWords, isActive: i == active)
-                                .font(.system(size: 18))
-                            if !reorganizedCards[i].translation.isEmpty {
-                                Text(reorganizedCards[i].translation)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(.secondary)
-                                    .opacity(i == active ? 1 : 0.7)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(i == active ? .primary : .secondary)
-                    .id("tr_\(i)")
-                }
-                .onChange(of: active) { _, newIndex in
-                    guard let idx = newIndex else { return }
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo("tr_\(idx)", anchor: .center)
-                    }
-                }
-            } else if isTranslatingLines {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Translating...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !translationPairs.isEmpty {
-                // Fallback: old-style translation pairs (no timestamps)
-                HStack {
-                    Spacer()
-                    Button {
-                        translationPairs = []
-                        translatedText = ""
-                        translateTask = Task { await translateByLines() }
-                    } label: {
-                        Label("Retranslate", systemImage: "arrow.counterclockwise")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                ForEach(translationPairs.indices, id: \.self) { i in
-                    VStack(alignment: .leading, spacing: 6) {
-                        WordFlowView(text: translationPairs[i].source, markedWords: $markedWords)
-                            .font(.body)
-                        Text(translationPairs[i].target)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                VStack(spacing: 12) {
-                    Text("Reorganize first to get translation with timestamps")
-                        .foregroundStyle(.tertiary)
-                    Button {
-                        fixTask = Task { await reorganizeTranscript() }
-                        transcriptTab = .original
-                    } label: {
-                        Label("Reorganize", systemImage: "wand.and.stars")
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 40)
-            }
-        }
-    }
-
-    var displayLines: [String] {
-        // Use active subtitle cards (reorganized or original) as display source
-        let cards = activeSubtitleCards
-        if !cards.isEmpty {
-            return cards.map { $0.text }
-        }
-
-        // Fallback: split plain text into sentences
-        return splitIntoSentences(String(story.text.characters))
-    }
-
-    /// Split text into sentences by punctuation (. ? !) while keeping the punctuation attached.
-    private func splitIntoSentences(_ text: String) -> [String] {
-        var sentences: [String] = []
-        var current = ""
-        for char in text {
-            current.append(char)
-            let sentenceEnders: Set<Character> = [".", "?", "!", "。", "？", "！"]
-            if sentenceEnders.contains(char) {
-                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { sentences.append(trimmed) }
-                current = ""
-            }
-        }
-        let remaining = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remaining.isEmpty { sentences.append(remaining) }
-        return sentences
-    }
-
-    /// Seek to the start time of a transcript line.
-    func seekToLine(_ index: Int) {
-        let cards = activeSubtitleCards
-        guard index < cards.count else { return }
-        seek(to: cards[index].start)
-        // For YouTube, seek() already includes v.play() — just update state
-        if youtubeWebView != nil {
-            isPlaying = true
-        } else if !isPlaying {
-            togglePlayback()
-        }
-    }
-
-    @ViewBuilder
-    func timestampButton(index: Int, isActive: Bool, startTime: Double) -> some View {
-        Button {
-            seekToLine(index)
-        } label: {
-            let m = Int(startTime) / 60
-            let s = Int(startTime) % 60
-            Text(String(format: "%d:%02d", m, s))
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(isActive ? preferences.accentColor : Color.gray)
-                .frame(width: 32, alignment: .trailing)
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    func transcriptLine(index: Int, text: String, isActive: Bool, hasTimestamp: Bool, startTime: Double) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            if hasTimestamp {
-                timestampButton(index: index, isActive: isActive, startTime: startTime)
-                    .padding(.top, 3)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                WordFlowView(text: text, markedWords: $markedWords, isActive: isActive)
-                    .font(.system(size: 18))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .contentShape(Rectangle())
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundStyle(isActive ? .primary : .secondary)
-        .id(index)
-    }
-
-    @ViewBuilder
-    func transcriptTextView(proxy: ScrollViewProxy) -> some View {
-        let lines = displayLines
-        let active = currentLineIndex
-        let cards = activeSubtitleCards
-        return LazyVStack(alignment: .leading, spacing: 4) {
-            ForEach(lines.indices, id: \.self) { i in
-                transcriptLine(
-                    index: i,
-                    text: lines[i],
-                    isActive: i == active,
-                    hasTimestamp: i < cards.count,
-                    startTime: i < cards.count ? cards[i].start : 0
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: active) { _, newIndex in
-            guard let idx = newIndex else { return }
-            withAnimation(.easeInOut(duration: 0.3)) {
-                proxy.scrollTo(idx, anchor: .center)
-            }
-        }
-    }
 
     // MARK: - Learning Panel (shared between video & audio)
 

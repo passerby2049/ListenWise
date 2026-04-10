@@ -92,7 +92,7 @@ final class SpokenWordTranscriber {
         isPreparing = false
 
         // Stream transcription results, collecting timing for subtitle cards
-        var subtitleCards: [(text: String, start: Double, end: Double)] = []
+        var subtitleCards: [SubtitleCard] = []
         let stream = engine.transcribe(audioFileURL: url, locale: recognitionLocale)
         for try await segment in stream {
             if segment.isFinal {
@@ -103,7 +103,7 @@ final class SpokenWordTranscriber {
                 if let start = segment.startTime, let end = segment.endTime {
                     let text = String(segment.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
-                        subtitleCards.append((text: text, start: start, end: end))
+                        subtitleCards.append(SubtitleCard(text: text, start: start, end: end))
                     }
                 }
             } else {
@@ -186,6 +186,106 @@ final class SpokenWordTranscriber {
     func updateStoryWithNewText(withFinal str: AttributedString) {
         story.text.wrappedValue.append(str)
         finalizedLineCount += 1
+    }
+
+    // MARK: - Live Streaming (mic input, same as sample app)
+
+    private var inputSequence: AsyncStream<AnalyzerInput>?
+    private var inputBuilder: AsyncStream<AnalyzerInput>.Continuation?
+    var analyzerFormat: AVAudioFormat?
+    var converter = BufferConverter()
+    private var liveAudioEngine: AVAudioEngine?
+
+    /// Set up for live streaming (mirrors sample app's setUpTranscriber exactly).
+    func setUpForLiveStream() async throws {
+        let locale = await supported(locale: recognitionLocale) ? recognitionLocale : SpokenWordTranscriber.defaultLocale
+
+        transcriber = SpeechTranscriber(locale: locale,
+                                        transcriptionOptions: [],
+                                        reportingOptions: [.volatileResults],
+                                        attributeOptions: [.audioTimeRange])
+
+        guard let transcriber else {
+            throw TranscriptionError.failedToSetupRecognitionStream
+        }
+
+        analyzer = SpeechAnalyzer(modules: [transcriber])
+
+        try await ensureModel(transcriber: transcriber, locale: locale)
+
+        self.analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+        (inputSequence, inputBuilder) = AsyncStream<AnalyzerInput>.makeStream()
+
+        recognizerTask = Task {
+            do {
+                for try await case let result in transcriber.results {
+                    let text = result.text
+                    if result.isFinal {
+                        finalizedTranscript += text
+                        volatileTranscript = ""
+                        finalizedLineCount += 1
+                    } else {
+                        volatileTranscript = text
+                        volatileTranscript.foregroundColor = .purple.opacity(0.4)
+                    }
+                }
+            } catch {
+                print("speech recognition failed")
+            }
+        }
+
+        guard let inputSequence else { return }
+        try await analyzer?.start(inputSequence: inputSequence)
+    }
+
+    /// Feed a single audio buffer (same as sample app's streamAudioToTranscriber).
+    func streamAudioToTranscriber(_ buffer: AVAudioPCMBuffer) async throws {
+        guard let inputBuilder, let analyzerFormat else {
+            throw TranscriptionError.invalidAudioDataType
+        }
+        let converted = try self.converter.convertBuffer(buffer, to: analyzerFormat)
+        let input = AnalyzerInput(buffer: converted)
+        inputBuilder.yield(input)
+    }
+
+    /// Start mic recording and feed to transcriber (same as sample app's record + audioStream).
+    func recordFromMic() async throws {
+        try await setUpForLiveStream()
+
+        let engine = AVAudioEngine()
+        self.liveAudioEngine = engine
+
+        let micFormat = engine.inputNode.outputFormat(forBus: 0)
+        print("[LiveStream] Mic format: \(micFormat), analyzer format: \(String(describing: analyzerFormat))")
+
+        // Same async stream pattern as sample app
+        var outputContinuation: AsyncStream<AVAudioPCMBuffer>.Continuation?
+        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { buffer, _ in
+            outputContinuation?.yield(buffer)
+        }
+
+        engine.prepare()
+        try engine.start()
+
+        let audioStream = AsyncStream<AVAudioPCMBuffer>(bufferingPolicy: .unbounded) { continuation in
+            outputContinuation = continuation
+        }
+
+        // Feed audio to transcriber (same loop as sample app)
+        for await input in audioStream {
+            try await self.streamAudioToTranscriber(input)
+        }
+    }
+
+    func stopLiveStream() async {
+        liveAudioEngine?.inputNode.removeTap(onBus: 0)
+        liveAudioEngine?.stop()
+        liveAudioEngine = nil
+        inputBuilder?.finish()
+        inputBuilder = nil
+        try? await analyzer?.finalizeAndFinishThroughEndOfInput()
+        recognizerTask?.cancel()
+        recognizerTask = nil
     }
 }
 

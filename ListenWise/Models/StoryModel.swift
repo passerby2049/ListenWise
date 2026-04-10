@@ -23,11 +23,11 @@ class Story: Identifiable {
     // --- Persisted learning data ---
 
     /// Original subtitle cards (with timing).
-    var savedSubtitleCards: [(text: String, start: Double, end: Double)] = []
+    var savedSubtitleCards: [SubtitleCard] = []
     /// Fixed transcript text from LLM.
     var savedFixedTranscript: String = ""
     /// Fixed subtitle cards from LLM.
-    var savedFixedSubtitleCards: [(text: String, start: Double, end: Double)] = []
+    var savedFixedSubtitleCards: [SubtitleCard] = []
     /// Marked words for vocabulary learning.
     var savedMarkedWords: Set<String> = []
     /// Raw LLM word learning response (JSON string).
@@ -43,7 +43,11 @@ class Story: Identifiable {
     /// YouTube HLS streaming URL for direct HD playback via AVPlayer.
     var youtubeStreamingURL: String = ""
     /// Reorganized subtitle cards (LLM-merged with proper sentence boundaries + translation).
-    var savedReorganizedCards: [(text: String, translation: String, start: Double, end: Double)] = []
+    var savedReorganizedCards: [ReorganizedCard] = []
+    /// Whether this is a YouTube live stream (no audio download, real-time transcription).
+    var isLiveStream: Bool = false
+    /// Live transcription segments (source + translation pairs).
+    var savedLiveSegments: [LiveSegment] = []
 
     /// Source language (for speech recognition and AI prompts).
     var sourceLanguage: String = "English"
@@ -105,6 +109,26 @@ enum SupportedLanguages {
 
 // MARK: - Chat Message
 
+// MARK: - Shared Data Structs
+
+struct SubtitleCard: Codable {
+    var text: String
+    var start: Double
+    var end: Double
+}
+
+struct ReorganizedCard: Codable {
+    var text: String
+    var translation: String
+    var start: Double
+    var end: Double
+}
+
+struct LiveSegment: Codable {
+    var source: String
+    var translation: String
+}
+
 struct ChatMessage: Codable {
     let role: String  // "user" or "assistant"
     var content: String
@@ -120,6 +144,20 @@ struct ReorganizedSentence: Codable {
     let cards: [Int]
     let text: String
     let target: String?
+}
+
+// MARK: - Equatable & Hashable
+
+extension Story: Equatable {
+    static func == (lhs: Story, rhs: Story) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+extension Story: Hashable {
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 // MARK: - Extensions

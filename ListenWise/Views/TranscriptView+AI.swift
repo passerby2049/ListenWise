@@ -73,7 +73,7 @@ extension TranscriptView {
         let tgtLang = story.targetLanguage
 
         let batchInterval: Double = 600 // ~10 minutes per batch
-        var allResults: [(text: String, translation: String, start: Double, end: Double)] = []
+        var allResults: [ReorganizedCard] = []
         var cursor = 0 // next card to process
         var batchIndex = 0
 
@@ -155,7 +155,7 @@ extension TranscriptView {
                         guard globalFirst < cards.count && globalLast < cards.count else { continue }
                         let start = cards[globalFirst].start
                         let end = cards[globalLast].end
-                        allResults.append((text: sentence.text, translation: sentence.target ?? "", start: start, end: end))
+                        allResults.append(ReorganizedCard(text: sentence.text, translation: sentence.target ?? "", start: start, end: end))
                         maxUsedIndex = max(maxUsedIndex, validIndices.last!)
                     }
                     // Next batch starts from the first card after the last trusted sentence
