@@ -83,6 +83,77 @@ class StoryStore {
             .sorted { $0.title < $1.title }
     }
 
+    /// Lightweight index of a subtitle card location — used to resolve the origin of a
+    /// stored review sentence without holding the entire Story graph in memory.
+    struct SourceLocation {
+        let storyID: UUID
+        let start: Double
+        let end: Double
+    }
+
+    /// Lightweight audio-source descriptor for a saved story — returned by
+    /// `loadAudioSource(for:)`. Used by the vocabulary audio clipper.
+    ///
+    /// If `localFileURL` was resolved from a security-scoped bookmark, `didStartSecurityScope`
+    /// is true and the caller is responsible for calling
+    /// `localFileURL?.stopAccessingSecurityScopedResource()` when finished with the file.
+    struct StoryAudioSource {
+        let id: UUID
+        let title: String
+        let localFileURL: URL?
+        let youtubeURL: String?
+        let didStartSecurityScope: Bool
+    }
+
+    /// Cheap per-id lookup: decodes just one JSON file and resolves the local file URL
+    /// (security-scoped bookmark first, path fallback).
+    func loadAudioSource(for storyID: UUID) -> StoryAudioSource? {
+        let file = storageDir.appendingPathComponent("\(storyID.uuidString).json")
+        guard let jsonData = try? Data(contentsOf: file),
+              let story = try? JSONDecoder().decode(StoryData.self, from: jsonData) else {
+            return nil
+        }
+        var resolved: URL? = nil
+        var startedScope = false
+        if let bookmark = story.urlBookmark {
+            var isStale = false
+            if let u = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, bookmarkDataIsStale: &isStale) {
+                if u.startAccessingSecurityScopedResource() {
+                    startedScope = true
+                }
+                resolved = u
+            }
+        }
+        if resolved == nil, let path = story.urlPath {
+            let u = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: u.path) { resolved = u }
+        }
+        let yt = story.youtubeURL?.isEmpty == false ? story.youtubeURL : nil
+        return StoryAudioSource(id: story.id, title: story.title, localFileURL: resolved, youtubeURL: yt, didStartSecurityScope: startedScope)
+    }
+
+    /// Scan all stored stories' subtitle cards for a text match of `sentence`.
+    /// Decodes only what's needed (id + subtitleCards) to stay cheap.
+    func findSourceLocation(for sentence: String) -> SourceLocation? {
+        let needle = sentence.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty,
+              let files = try? FileManager.default.contentsOfDirectory(at: storageDir, includingPropertiesForKeys: nil) else {
+            return nil
+        }
+        for file in files where file.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: file),
+                  let story = try? JSONDecoder().decode(StoryData.self, from: data) else { continue }
+            let cards = (story.subtitleCards ?? []) + (story.fixedSubtitleCards ?? [])
+            for card in cards {
+                let hay = card.text.lowercased()
+                if hay == needle || hay.contains(needle) || needle.contains(hay) {
+                    return SourceLocation(storyID: story.id, start: card.start, end: card.end)
+                }
+            }
+        }
+        return nil
+    }
+
     private func loadStory(from file: URL) -> Story? {
         guard let jsonData = try? Data(contentsOf: file),
               let data = try? JSONDecoder().decode(StoryData.self, from: jsonData) else {

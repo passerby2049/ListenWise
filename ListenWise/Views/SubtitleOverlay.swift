@@ -16,13 +16,13 @@ struct SubtitleOverlay: View {
                 VStack(alignment: .center, spacing: 4) {
                     if !source.isEmpty {
                         Text(source)
-                            .foregroundColor(.white)
+                            .foregroundStyle(.white)
                             .font(.title3.bold())
                             .lineLimit(2)
                     }
                     if !translation.isEmpty {
                         Text(translation)
-                            .foregroundColor(.white.opacity(0.8))
+                            .foregroundStyle(.white.opacity(0.8))
                             .font(.callout)
                             .lineLimit(2)
                     }

@@ -154,7 +154,7 @@ extension TranscriptView {
             if segments.isEmpty {
                 if !volatile.isEmpty {
                     Text(volatile)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .font(.system(size: 16))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
@@ -168,7 +168,7 @@ extension TranscriptView {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if !seg.translation.isEmpty {
                             Text(seg.translation)
-                                .foregroundColor(.blue)
+                                .foregroundStyle(.blue)
                                 .font(.system(size: 15))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -179,7 +179,7 @@ extension TranscriptView {
                 }
                 if !volatile.isEmpty {
                     Text(volatile)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .font(.system(size: 16))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)

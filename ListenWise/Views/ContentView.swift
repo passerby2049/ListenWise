@@ -11,6 +11,8 @@ struct ContentView: View {
     @Environment(AppPreferences.self) private var preferences
     @State private var selection: Story?
     @State private var stories: [Story] = []
+    @State private var isShowingReview = false
+    @State private var dueCount: Int = 0
 
 
     var body: some View {
@@ -83,10 +85,15 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $isShowingReview, onDismiss: refreshDueCount) {
+            ReviewSessionView()
+                .environment(preferences)
+        }
         .onAppear {
             if stories.isEmpty {
                 stories = StoryStore.shared.loadAll()
             }
+            refreshDueCount()
         }
         .onChange(of: stories) {
             let snapshot = stories
@@ -101,6 +108,36 @@ struct ContentView: View {
     @ViewBuilder
     var sidebarFooter: some View {
         VStack(spacing: 0) {
+            Divider()
+            Button {
+                refreshDueCount()
+                isShowingReview = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain.head.profile")
+                        .foregroundStyle(dueCount > 0 ? preferences.accentColor : .secondary)
+                    Text("Review")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if dueCount > 0 {
+                        Text("\(dueCount)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(preferences.accentColor))
+                    } else {
+                        Text("0")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             Divider()
             SettingsLink {
                 HStack(spacing: 8) {
@@ -117,6 +154,10 @@ struct ContentView: View {
             .buttonStyle(.plain)
         }
         .background(.bar)
+    }
+
+    private func refreshDueCount() {
+        dueCount = GlobalVocabulary.shared.dueCount()
     }
 
     // MARK: - Empty State

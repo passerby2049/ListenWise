@@ -690,7 +690,7 @@ class TranscriptViewModel {
         if let response: LearningResponse = parseLLMJSONObject(raw) {
             if let words = response.words, !words.isEmpty {
                 wordExplanations.insert(contentsOf: words, at: 0)
-                GlobalVocabulary.shared.saveExplanations(words)
+                GlobalVocabulary.shared.saveExplanations(words, storyID: story.id, cards: activeSubtitleCards)
                 for w in words { globalOnlyWords.remove(w.word.lowercased()) }
             }
             if let sentences = response.sentences, !sentences.isEmpty {
