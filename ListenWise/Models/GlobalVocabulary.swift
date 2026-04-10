@@ -216,10 +216,12 @@ class GlobalVocabulary {
     }
 
     /// Returns global words that appear in the given text lines.
+    /// Uses the same token/phrase matching rules as WordFlowView's highlighting,
+    /// so the inspector list can never contain a word the rendered transcript
+    /// wouldn't also visually mark.
     func matchingWords(in lines: [String]) -> Set<String> {
         guard !words.isEmpty, !lines.isEmpty else { return [] }
-        let fullText = lines.joined(separator: " ").lowercased()
-        return words.filter { fullText.contains($0) }
+        return words.filter { WordTokenizer.containsAny($0, in: lines) }
     }
 
     // MARK: - Persistence

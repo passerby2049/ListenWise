@@ -19,6 +19,7 @@ class Story: Identifiable {
     var text: AttributedString
     var url: URL?
     var isDone: Bool
+    var createdAt: Date
 
     // --- Persisted learning data ---
 
@@ -60,11 +61,12 @@ class Story: Identifiable {
         return Set(["mp4", "mov", "m4v", "avi", "mkv"]).contains(url.pathExtension.lowercased())
     }
 
-    init(title: String, text: AttributedString, url: URL? = nil, isDone: Bool = false) {
+    init(title: String, text: AttributedString, url: URL? = nil, isDone: Bool = false, createdAt: Date = Date()) {
         self.title = title
         self.text = text
         self.url = url
         self.isDone = isDone
+        self.createdAt = createdAt
         self.id_ = UUID()
     }
 
@@ -165,6 +167,12 @@ extension Story: Hashable {
 extension Story {
     static func blank() -> Story {
         return .init(title: "New Story", text: AttributedString(""))
+    }
+
+    /// A story the user never actually filled with a source.
+    /// Used to auto-clean abandoned "New Story" entries on navigation.
+    var isBlank: Bool {
+        url == nil && youtubeURL.isEmpty && !isLiveStream
     }
 
     func storyBrokenUpByLines() -> AttributedString {

@@ -35,7 +35,7 @@ struct ContentView: View {
                 ToolbarItem {
                     Button {
                         let newStory = Story.blank()
-                        stories.append(newStory)
+                        stories.insert(newStory, at: 0)
                         selectionID = newStory.id
                     } label: {
                         Label("New Story", systemImage: "plus")
@@ -76,12 +76,17 @@ struct ContentView: View {
         }
         .onAppear {
             if stories.isEmpty {
-                stories = StoryStore.shared.loadAll()
+                // Strip any blank stories that predate the auto-cleanup rule.
+                stories = StoryStore.shared.loadAll().filter { !$0.isBlank }
             }
             refreshDueCount()
         }
+        .onChange(of: selectionID) { oldID, _ in
+            discardBlankStory(withID: oldID)
+        }
         .onChange(of: stories) {
-            let snapshot = stories
+            // Never persist blank stories — they're ephemeral drafts.
+            let snapshot = stories.filter { !$0.isBlank }
             Task.detached(priority: .utility) {
                 StoryStore.shared.save(snapshot)
             }
@@ -172,6 +177,15 @@ struct ContentView: View {
             try? FileManager.default.removeItem(at: url)
         }
         stories.removeAll { $0.id == story.id }
+    }
+
+    /// Remove a blank story that the user abandoned by navigating away.
+    /// No-ops if the id is missing, the story no longer exists, or it has content.
+    private func discardBlankStory(withID id: UUID?) {
+        guard let id,
+              let story = stories.first(where: { $0.id == id }),
+              story.isBlank else { return }
+        stories.removeAll { $0.id == id }
     }
 }
 

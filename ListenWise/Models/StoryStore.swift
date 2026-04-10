@@ -40,6 +40,7 @@ class StoryStore {
             title: story.title,
             plainText: String(story.text.characters),
             isDone: story.isDone,
+            createdAt: story.createdAt,
             urlBookmark: bookmarkData(for: story.url),
             urlPath: story.url?.path,
             subtitleCards: {
@@ -80,7 +81,7 @@ class StoryStore {
         return files
             .filter { $0.pathExtension == "json" }
             .compactMap { loadStory(from: $0) }
-            .sorted { $0.title < $1.title }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     /// Lightweight index of a subtitle card location — used to resolve the origin of a
@@ -160,7 +161,12 @@ class StoryStore {
             return nil
         }
 
-        let story = Story(title: data.title, text: AttributedString(data.plainText), isDone: data.isDone)
+        let story = Story(
+            title: data.title,
+            text: AttributedString(data.plainText),
+            isDone: data.isDone,
+            createdAt: data.createdAt ?? Date.distantPast
+        )
         story.id_ = data.id
 
         // Restore file URL
@@ -261,6 +267,7 @@ private struct StoryData: Codable {
     let title: String
     let plainText: String
     let isDone: Bool
+    let createdAt: Date?
     let urlBookmark: Data?
     let urlPath: String?
     let subtitleCards: [SubtitleCard]?
