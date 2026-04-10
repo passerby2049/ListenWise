@@ -48,7 +48,6 @@ struct ReviewSessionView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .frame(minWidth: 640, minHeight: 520)
         .onAppear(perform: loadQueue)
         .onDisappear {
@@ -538,7 +537,7 @@ struct ReviewSessionView: View {
                     .help("Drill every word regardless of due date")
                 }
                 Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .controlSize(.large)
                     .keyboardShortcut(.return, modifiers: [])
             }

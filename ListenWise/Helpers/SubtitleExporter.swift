@@ -94,13 +94,8 @@ func extractAudioFromVideo(_ videoURL: URL) async throws -> URL {
     guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
         throw TranscriptionError.audioFilePathNotFound
     }
-    session.outputURL = tempURL
-    session.outputFileType = .m4a
     session.timeRange = CMTimeRange(start: .zero, duration: duration ?? CMTime(seconds: 7200, preferredTimescale: 600))
 
-    await session.export()
-    guard session.status == .completed else {
-        throw TranscriptionError.audioFilePathNotFound
-    }
+    try await session.export(to: tempURL, as: .m4a)
     return tempURL
 }

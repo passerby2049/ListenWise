@@ -59,6 +59,9 @@ struct WordFlowView: View {
     let text: String
     @Binding var markedWords: Set<String>
     var isActive: Bool = true
+    /// Called when a word or phrase is newly marked. Receives the lowercased key.
+    /// Callers use this to record which sentence a selection originated from.
+    var onMark: ((String) -> Void)? = nil
 
     // Drag-to-select state
     @State private var dragStartIndex: Int? = nil
@@ -328,7 +331,10 @@ struct WordFlowView: View {
         )
         .onTapGesture {
             if marked { markedWords.remove(k) }
-            else if !k.isEmpty { markedWords.insert(k) }
+            else if !k.isEmpty {
+                markedWords.insert(k)
+                onMark?(k)
+            }
         }
     }
 
@@ -354,5 +360,6 @@ struct WordFlowView: View {
             return true
         }
         markedWords.insert(phrase)
+        onMark?(phrase)
     }
 }

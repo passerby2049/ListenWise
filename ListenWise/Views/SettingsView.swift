@@ -59,40 +59,26 @@ struct SettingsView: View {
     @State private var isLoadingModels = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Sidebar
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(SettingsSection.allCases) { section in
-                    Button {
-                        selectedSection = section
-                    } label: {
-                        Label(section.rawValue, systemImage: section.icon)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(selectedSection == section ? currentAccentColor.opacity(0.2) : Color.clear)
-                            )
-                            .foregroundStyle(selectedSection == section ? .primary : .secondary)
-                    }
-                    .buttonStyle(.plain)
+        NavigationSplitView {
+            List(SettingsSection.allCases, selection: $selectedSection) { section in
+                Label(section.rawValue, systemImage: section.icon)
+                    .tag(section)
+            }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 215, max: 240)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            Group {
+                switch selectedSection {
+                case .transcription: transcriptionSection
+                case .appearance: appearanceSection
+                case .model: modelSection
+                case .openRouter: openRouterSection
+                case .anthropic: anthropicSection
                 }
-                Spacer()
             }
-            .padding(12)
-            .frame(width: 180)
-
-            Divider()
-
-            // Detail
-            ScrollView {
-                detailContent
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical)
-            }
+            .navigationSplitViewColumnWidth(min: 480, ideal: 580)
         }
-        .frame(width: 640, height: 480)
+        .frame(minWidth: 760, minHeight: 540)
         .onAppear {
             openRouterKey = preferences.openRouterAPIKey
             anthropicBaseURL = preferences.anthropicBaseURL
@@ -110,120 +96,81 @@ struct SettingsView: View {
         .onChange(of: selectedAccentColor) { _, v in preferences.accentColorName = v }
     }
 
-    // MARK: - Detail Content Router
-
-    @ViewBuilder
-    private var detailContent: some View {
-        switch selectedSection {
-        case .transcription: transcriptionSection
-        case .appearance: appearanceSection
-        case .model: modelSection
-        case .openRouter: openRouterSection
-        case .anthropic: anthropicSection
-        }
-    }
-
     // MARK: - Transcription
 
     private var transcriptionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(TranscriptionEngineID.allCases) { engine in
-                engineCard(engine)
+        Form {
+            Section {
+                ForEach(TranscriptionEngineID.allCases) { engine in
+                    engineRow(engine)
+                }
+            } header: {
+                Text("Speech Recognition Engine")
+            } footer: {
+                Text("Apple Speech runs on-device. Parakeet engines require a one-time model download.")
             }
         }
-        .padding()
+        .formStyle(.grouped)
         .onAppear { refreshModelStatus() }
     }
 
-    private func engineCard(_ engine: TranscriptionEngineID) -> some View {
+    private func engineRow(_ engine: TranscriptionEngineID) -> some View {
         let isActive = selectedEngine == engine
         let isDownloaded = modelDownloadStatus[engine] ?? !engine.requiresDownload
         let isCurrentlyDownloading = isDownloadingModel == engine
 
         return HStack(spacing: 12) {
-            // Icon
             Image(systemName: engine.iconName)
-                .font(.title2)
-                .frame(width: 36, height: 36)
-                .background(isActive ? currentAccentColor.opacity(0.15) : Color.secondary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .font(.title3)
+                .foregroundStyle(isActive ? currentAccentColor : Color.secondary)
+                .frame(width: 28)
 
-            // Info
             VStack(alignment: .leading, spacing: 2) {
                 Text(engine.displayName)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(engine.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
+                    .font(.body)
+                HStack(spacing: 6) {
                     Text(engine.speedLabel)
+                    Text("·")
                     Text(engine.accuracyLabel)
                     if engine.requiresDownload {
+                        Text("·")
                         Text(engine.downloadSize)
                     }
                 }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            // Action
             if isCurrentlyDownloading {
-                ProgressView(value: downloadProgress)
-                    .frame(width: 80)
+                ProgressView(value: downloadProgress).frame(width: 80)
             } else if isActive {
-                Text("Active")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Color.green.opacity(0.15))
-                    .clipShape(Capsule())
+                Image(systemName: "checkmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(currentAccentColor)
             } else if !engine.requiresDownload || isDownloaded {
-                Button("Activate") {
-                    selectedEngine = engine
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                Button("Activate") { selectedEngine = engine }
+                    .controlSize(.small)
             } else {
                 Button("Download") {
                     Task { await downloadModel(engine) }
                 }
-                .buttonStyle(.bordered)
                 .controlSize(.small)
-                #if !arch(arm64)
-                if engine.requiresAppleSilicon {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
-                #endif
             }
 
-            // Delete button for downloaded models
             if engine.requiresDownload && isDownloaded && !isCurrentlyDownloading {
                 Button {
                     deleteModel(engine)
                 } label: {
                     Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.red.opacity(0.8))
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .help("Delete downloaded model")
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isActive ? currentAccentColor.opacity(0.08) : Color.secondary.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(isActive ? currentAccentColor.opacity(0.3) : Color.clear, lineWidth: 1)
-        )
+        .padding(.vertical, 4)
     }
 
     // MARK: - Appearance
@@ -240,33 +187,31 @@ struct SettingsView: View {
                     Text("Dark").tag("dark")
                 }
                 .pickerStyle(.segmented)
+                .fixedSize()
             }
 
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Accent Color")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("Pick a preset accent color for the app.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
+                LabeledContent("Accent Color") {
+                    HStack(spacing: 10) {
                         ForEach(accentColorOptions, id: \.name) { option in
                             Button {
                                 selectedAccentColor = option.name
                             } label: {
                                 Circle()
                                     .fill(option.color)
-                                    .frame(width: 24, height: 24)
+                                    .frame(width: 20, height: 20)
                                     .overlay(
                                         Circle()
-                                            .stroke(Color.primary.opacity(selectedAccentColor == option.name ? 0.6 : 0), lineWidth: 2)
-                                            .padding(-2)
+                                            .stroke(Color.primary.opacity(selectedAccentColor == option.name ? 0.7 : 0), lineWidth: 2)
+                                            .padding(-3)
                                     )
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
+            } footer: {
+                Text("Pick a preset accent color for the app.")
             }
         }
         .formStyle(.grouped)

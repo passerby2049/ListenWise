@@ -39,7 +39,7 @@ extension TranscriptView {
                     liveStreamURLText = ""
                 }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(YouTubeHelper.extractVideoID(liveStreamURLText) == nil)
             }
         }
@@ -163,7 +163,13 @@ extension TranscriptView {
             } else {
                 ForEach(Array(segments.enumerated()), id: \.offset) { idx, seg in
                     VStack(alignment: .leading, spacing: 2) {
-                        WordFlowView(text: seg.source, markedWords: $vm.markedWords)
+                        WordFlowView(
+                            text: seg.source,
+                            markedWords: $vm.markedWords,
+                            onMark: { [vm, text = seg.source] key in
+                                vm.markedWordOrigins[key] = text
+                            }
+                        )
                             .font(.system(size: 16))
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if !seg.translation.isEmpty {

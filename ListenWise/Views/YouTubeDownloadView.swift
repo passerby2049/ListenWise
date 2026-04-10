@@ -20,27 +20,18 @@ struct YouTubeDownloadView: View {
     @State private var errorMessage: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 16) {
             Text("Import from YouTube")
-                .font(.headline)
+                .font(.title2.bold())
+            Text("Paste a YouTube video URL to download its audio and transcribe.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
-            HStack {
-                TextField("Paste YouTube URL...", text: $urlText)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(isDownloading)
-
-                if isDownloading {
-                    Button("Cancel") {
-                        isDownloading = false
-                        progress = ""
-                    }
-                    .foregroundStyle(.red)
-                } else {
-                    Button("Import") { startDownload() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(urlText.isEmpty || !isValidURL)
-                }
-            }
+            TextField("https://www.youtube.com/watch?v=...", text: $urlText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 400)
+                .disabled(isDownloading)
 
             if isDownloading {
                 HStack(spacing: 8) {
@@ -56,10 +47,27 @@ struct YouTubeDownloadView: View {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    if isDownloading {
+                        isDownloading = false
+                        progress = ""
+                    } else {
+                        dismiss()
+                    }
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Import") { startDownload() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.glassProminent)
+                    .disabled(isDownloading || urlText.isEmpty || !isValidURL)
             }
         }
-        .padding(20)
-        .frame(width: 500)
+        .padding(24)
     }
 
     var isValidURL: Bool {

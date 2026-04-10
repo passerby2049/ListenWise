@@ -64,6 +64,11 @@ struct ReviewItem: Identifiable {
 /// SM-2 scheduler. Pure function — returns a new state given the current one and a rating.
 enum SM2 {
     /// Compute the next state after a review.
+    ///
+    /// Modified SM-2 à la Anki: the rating influences interval from the very first
+    /// review (vanilla SM-2 hard-codes `interval = 1` for the first review and
+    /// `interval = 6` for the second, which makes Hard/Good/Easy indistinguishable
+    /// during the learning phase — confusing for users).
     static func schedule(_ state: ReviewState, rating: ReviewRating, now: Date = Date()) -> ReviewState {
         var s = state
         let q = Double(rating.rawValue)
@@ -74,8 +79,22 @@ enum SM2 {
             s.totalLapses += 1
         } else {
             switch s.repetitions {
-            case 0: s.interval = 1
-            case 1: s.interval = 6
+            case 0:
+                // First successful review — graduate with a rating-dependent interval.
+                switch rating {
+                case .hard: s.interval = 1
+                case .good: s.interval = 2
+                case .easy: s.interval = 4
+                case .again: s.interval = 1
+                }
+            case 1:
+                // Second successful review — young-card intervals.
+                switch rating {
+                case .hard: s.interval = 3
+                case .good: s.interval = 6
+                case .easy: s.interval = 10
+                case .again: s.interval = 1
+                }
             default:
                 var factor = s.ef
                 if rating == .hard { factor = max(1.2, s.ef * 0.8) }

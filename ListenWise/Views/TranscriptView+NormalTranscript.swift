@@ -21,13 +21,7 @@ extension TranscriptView {
                     ForEach(TranscriptTab.allCases, id: \.self) { tab in
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) { vm.transcriptTab = tab }
-                            if let idx = vm.currentLineIndex {
-                                let saved = idx
-                                vm.currentLineIndex = nil
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    vm.currentLineIndex = saved
-                                }
-                            }
+                            refreshCurrentLineIndex()
                         } label: {
                             Text(tab.rawValue)
                                 .font(.system(size: 11, weight: vm.transcriptTab == tab ? .semibold : .medium))
@@ -65,13 +59,7 @@ extension TranscriptView {
                                 if value && vm.reorganizedCards.isEmpty && !vm.isReorganizing {
                                     vm.startReorganize()
                                 }
-                                if let idx = vm.currentLineIndex {
-                                    let saved = idx
-                                    vm.currentLineIndex = nil
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        vm.currentLineIndex = saved
-                                    }
-                                }
+                                refreshCurrentLineIndex()
                             }
                         } label: {
                             Text(label)
@@ -174,6 +162,16 @@ extension TranscriptView {
         }
     }
 
+    // Nudge the highlighted line so dependent views re-render after a tab switch.
+    private func refreshCurrentLineIndex() {
+        guard let idx = vm.currentLineIndex else { return }
+        vm.currentLineIndex = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            vm.currentLineIndex = idx
+        }
+    }
+
     // MARK: - Translation Text View (Bilingual Tab)
 
     @ViewBuilder
@@ -203,7 +201,14 @@ extension TranscriptView {
                         timestampButton(index: i, isActive: i == active, startTime: vm.reorganizedCards[i].start)
                             .padding(.top, 3)
                         VStack(alignment: .leading, spacing: 6) {
-                            WordFlowView(text: vm.reorganizedCards[i].text, markedWords: $vm.markedWords, isActive: i == active)
+                            WordFlowView(
+                                text: vm.reorganizedCards[i].text,
+                                markedWords: $vm.markedWords,
+                                isActive: i == active,
+                                onMark: { [vm, text = vm.reorganizedCards[i].text] key in
+                                    vm.markedWordOrigins[key] = text
+                                }
+                            )
                                 .font(.system(size: 18))
                             if !vm.reorganizedCards[i].translation.isEmpty {
                                 Text(vm.reorganizedCards[i].translation)
@@ -245,7 +250,13 @@ extension TranscriptView {
                 }
                 ForEach(vm.translationPairs.indices, id: \.self) { i in
                     VStack(alignment: .leading, spacing: 6) {
-                        WordFlowView(text: vm.translationPairs[i].source, markedWords: $vm.markedWords)
+                        WordFlowView(
+                            text: vm.translationPairs[i].source,
+                            markedWords: $vm.markedWords,
+                            onMark: { [vm, text = vm.translationPairs[i].source] key in
+                                vm.markedWordOrigins[key] = text
+                            }
+                        )
                             .font(.body)
                         Text(vm.translationPairs[i].target)
                             .font(.body).foregroundStyle(.secondary)
@@ -263,7 +274,7 @@ extension TranscriptView {
                     } label: {
                         Label("Reorganize", systemImage: "wand.and.stars")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 40)
@@ -297,7 +308,12 @@ extension TranscriptView {
                     .padding(.top, 3)
             }
             VStack(alignment: .leading, spacing: 8) {
-                WordFlowView(text: text, markedWords: $vm.markedWords, isActive: isActive)
+                WordFlowView(
+                    text: text,
+                    markedWords: $vm.markedWords,
+                    isActive: isActive,
+                    onMark: { [vm] key in vm.markedWordOrigins[key] = text }
+                )
                     .font(.system(size: 18))
             }
             .frame(maxWidth: .infinity, alignment: .leading)

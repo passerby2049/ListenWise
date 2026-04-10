@@ -23,7 +23,6 @@ struct ListenWiseApp: App {
             ContentView()
                 .environment(preferences)
                 .tint(accentColor)
-                .accentColor(accentColor)
                 .onChange(of: appearance) { _, newValue in
                     applyAppearance(newValue)
                 }
@@ -34,7 +33,6 @@ struct ListenWiseApp: App {
             SettingsView()
                 .environment(preferences)
                 .tint(accentColor)
-                .accentColor(accentColor)
         }
     }
 }

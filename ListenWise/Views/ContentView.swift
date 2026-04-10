@@ -9,7 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppPreferences.self) private var preferences
-    @State private var selection: Story?
+    @State private var selectionID: UUID?
     @State private var stories: [Story] = []
     @State private var isShowingReview = false
     @State private var dueCount: Int = 0
@@ -17,23 +17,10 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(stories) { story in
-                        Button {
-                            selection = story
-                        } label: {
-                            StoryRowView(story: story)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(selection?.id == story.id ? preferences.accentColor.opacity(0.35) : Color.clear)
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+            List(selection: $selectionID) {
+                ForEach(stories) { story in
+                    StoryRowView(story: story)
+                        .tag(story.id)
                         .contextMenu {
                             Button(role: .destructive) {
                                 deleteStory(story)
@@ -41,10 +28,7 @@ struct ContentView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
-                    }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
             }
             .navigationTitle("ListenWise")
             .toolbar {
@@ -52,23 +36,25 @@ struct ContentView: View {
                     Button {
                         let newStory = Story.blank()
                         stories.append(newStory)
-                        selection = newStory
+                        selectionID = newStory.id
                     } label: {
                         Label("New Story", systemImage: "plus")
                     }
                 }
             }
             .onDeleteCommand {
-                if let sel = selection { deleteStory(sel) }
+                if let id = selectionID,
+                   let story = stories.first(where: { $0.id == id }) {
+                    deleteStory(story)
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 sidebarFooter
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
-            if let sel = selection,
-               let idx = stories.firstIndex(where: { $0.id == sel.id }),
-               idx < stories.count {
+            if let id = selectionID,
+               let idx = stories.firstIndex(where: { $0.id == id }) {
                 TranscriptView(story: Binding(
                     get: {
                         guard idx < stories.count else { return Story.blank() }
@@ -79,12 +65,11 @@ struct ContentView: View {
                         stories[idx] = $0
                     }
                 ))
-                .id(sel.id)
+                .id(id)
             } else {
                 emptyStateView
             }
         }
-        .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $isShowingReview, onDismiss: refreshDueCount) {
             ReviewSessionView()
                 .environment(preferences)
@@ -181,7 +166,7 @@ struct ContentView: View {
     // MARK: - Helpers
 
     func deleteStory(_ story: Story) {
-        if selection?.id == story.id { selection = nil }
+        if selectionID == story.id { selectionID = nil }
         // Delete downloaded YouTube video file
         if !story.youtubeURL.isEmpty, let url = story.url {
             try? FileManager.default.removeItem(at: url)
@@ -226,14 +211,13 @@ private struct StoryRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(story.title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.body)
                 .lineLimit(1)
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 11))
                 Text(metaText)
-                    .font(.system(size: 12))
             }
+            .font(.caption)
             .foregroundStyle(story.isDone ? Color.secondary : Color.orange)
         }
         .padding(.vertical, 2)

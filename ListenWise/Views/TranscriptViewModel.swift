@@ -64,6 +64,10 @@ class TranscriptViewModel {
     // MARK: - Learning
 
     var markedWords: Set<String> = []
+    /// Source sentence from which each marked word/phrase was selected.
+    /// Keyed by the same lowercased key WordFlowView uses for markedWords.
+    /// Transient — used only to anchor LLM context to the click site.
+    var markedWordOrigins: [String: String] = [:]
     /// Words whose explanations came from global vocab (not queried in this story).
     var globalOnlyWords: Set<String> = []
     var wordLearningResponse = ""
@@ -298,26 +302,30 @@ class TranscriptViewModel {
         let interval = CMTime(seconds: 0.3, preferredTimescale: 600)
         let isVideo = sourceIsVideo
         timeObserver = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            // queue: .main guarantees this runs on the main thread, so we can
+            // safely re-enter the MainActor-isolated context without a hop.
             guard let self else { return }
-            let t = time.seconds
-            if !isVideo { currentPlaybackTime = t }
-            let cards = activeSubtitleCards
-            let newIndex = cards.firstIndex { $0.start <= t && t < $0.end }
-            if newIndex != currentLineIndex {
-                currentLineIndex = newIndex
-                if let idx = newIndex, inspectorTab == .vocab, !markedWords.isEmpty {
-                    let lineText = cards[idx].text.lowercased()
-                    if let firstMatch = markedWords.sorted().first(where: { lineText.contains($0) }) {
-                        vocabScrollTarget = firstMatch
+            MainActor.assumeIsolated {
+                let t = time.seconds
+                if !isVideo { self.currentPlaybackTime = t }
+                let cards = self.activeSubtitleCards
+                let newIndex = cards.firstIndex { $0.start <= t && t < $0.end }
+                if newIndex != self.currentLineIndex {
+                    self.currentLineIndex = newIndex
+                    if let idx = newIndex, self.inspectorTab == .vocab, !self.markedWords.isEmpty {
+                        let lineText = cards[idx].text.lowercased()
+                        if let firstMatch = self.markedWords.sorted().first(where: { lineText.contains($0) }) {
+                            self.vocabScrollTarget = firstMatch
+                        }
                     }
                 }
-            }
-            if isVideo {
-                currentSubtitleText = newIndex.map { cards[$0].text } ?? ""
-                if showReorganized && !reorganizedCards.isEmpty, let idx = newIndex, idx < reorganizedCards.count {
-                    currentSubtitleTranslation = reorganizedCards[idx].translation
-                } else {
-                    currentSubtitleTranslation = ""
+                if isVideo {
+                    self.currentSubtitleText = newIndex.map { cards[$0].text } ?? ""
+                    if self.showReorganized && !self.reorganizedCards.isEmpty, let idx = newIndex, idx < self.reorganizedCards.count {
+                        self.currentSubtitleTranslation = self.reorganizedCards[idx].translation
+                    } else {
+                        self.currentSubtitleTranslation = ""
+                    }
                 }
             }
         }
@@ -618,25 +626,23 @@ class TranscriptViewModel {
         let srcLang = story.sourceLanguage
         let tgtLang = story.targetLanguage
         let lines = displayLines
-        var contextLines: [String] = []
-        for line in lines {
-            let lower = line.lowercased()
-            if newItems.contains(where: { lower.contains($0) }) && !contextLines.contains(line) {
-                contextLines.append(line)
-            }
+        func fallbackSentence(for item: String) -> String? {
+            lines.first(where: { $0.lowercased().contains(item) })
         }
-        let itemList = newItems.sorted().joined(separator: "\n- ")
-        let context = contextLines.isEmpty ? "" :
-            "Context from transcript (for reference only — do NOT analyze these sentences as items):\n" + contextLines.map { "- \($0)" }.joined(separator: "\n")
+        let sortedItems = newItems.sorted()
+        let itemBlocks = sortedItems.map { item -> String in
+            let origin = markedWordOrigins[item] ?? fallbackSentence(for: item) ?? ""
+            return "- item: \"\(item)\"\n  source_sentence: \"\(origin)\""
+        }.joined(separator: "\n")
         let prompt = """
         I'm learning \(srcLang). Below are items I selected from a transcript. Each item may be a single word, a short phrase, or a full sentence/clause. You decide which type each one is.
 
         IMPORTANT: Each item must appear in exactly ONE category. Do NOT break an item into sub-words. For example, if the item is "he is not bluffing", put it in "sentences" only — do NOT also add "bluffing" to "words". Return exactly ONE entry per item.
 
-        Items:
-        - \(itemList)
+        Each item below is paired with the EXACT source sentence it was selected from. When you return `sentence_source`, you MUST use that paired sentence verbatim — do NOT substitute a different sentence, even if the item appears elsewhere in the transcript.
 
-        \(context)
+        Items:
+        \(itemBlocks)
 
         Return a JSON object ONLY (no markdown, no ```json```, no explanation). The object has two arrays:
         {

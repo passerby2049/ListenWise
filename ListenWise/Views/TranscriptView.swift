@@ -118,7 +118,6 @@ struct TranscriptView: View {
             Button { vm.exportStory() } label: {
                 Label("Export Notes", systemImage: "square.and.arrow.up")
             }
-            .buttonStyle(.bordered)
             .disabled(!story.isDone)
         }
         ToolbarItem(placement: .primaryAction) {
@@ -133,44 +132,48 @@ struct TranscriptView: View {
 
     @ViewBuilder
     var importPromptView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "square.and.arrow.down.on.square")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            Text("Import an audio or video file")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 24) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Source Language").font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: $story.sourceLanguage) {
-                        ForEach(SupportedLanguages.source) { lang in Text(lang.displayName).tag(lang.id) }
-                    }.frame(width: 180)
+        ContentUnavailableView {
+            Label("Import an audio or video file", systemImage: "square.and.arrow.down.on.square")
+        } description: {
+            Text("Choose a source language, then pick how to get started.")
+        } actions: {
+            VStack(spacing: 20) {
+                Form {
+                    Section {
+                        Picker("Source Language", selection: $story.sourceLanguage) {
+                            ForEach(SupportedLanguages.source) { lang in
+                                Text(lang.displayName).tag(lang.id)
+                            }
+                        }
+                        Picker("Target Language", selection: $story.targetLanguage) {
+                            ForEach(SupportedLanguages.target) { lang in
+                                Text(lang.displayName).tag(lang.id)
+                            }
+                        }
+                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Target Language").font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: $story.targetLanguage) {
-                        ForEach(SupportedLanguages.target) { lang in Text(lang.displayName).tag(lang.id) }
-                    }.frame(width: 180)
+                .formStyle(.grouped)
+                .scrollDisabled(true)
+                .frame(width: 480, height: 140)
+
+                HStack(spacing: 10) {
+                    Button { isImporting = true } label: {
+                        Label("Import File", systemImage: "folder")
+                    }
+
+                    Button { isShowingYouTubeDownload = true } label: {
+                        Label("YouTube", systemImage: "play.rectangle")
+                    }
+
+                    Button { isShowingLiveStreamInput = true } label: {
+                        Label("Live", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .tint(.red)
                 }
-            }
-
-            HStack(spacing: 12) {
-                Button { isImporting = true } label: {
-                    Label("Import File", systemImage: "folder")
-                }.buttonStyle(.borderedProminent).controlSize(.large)
-
-                Button { isShowingYouTubeDownload = true } label: {
-                    Label("YouTube", systemImage: "play.rectangle")
-                }.buttonStyle(.bordered).controlSize(.large)
-
-                Button { isShowingLiveStreamInput = true } label: {
-                    Label("Live", systemImage: "antenna.radiowaves.left.and.right")
-                }.buttonStyle(.bordered).controlSize(.large).tint(.red)
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $isShowingLiveStreamInput) {
             liveStreamInputSheet
         }
@@ -290,14 +293,7 @@ struct TranscriptView: View {
                         .foregroundStyle(vm.showSubtitle ? preferences.accentColor : Color.white.opacity(0.9))
                         .frame(height: 36)
                         .padding(.horizontal, 12)
-                        .background(
-                            Capsule()
-                                .fill(Color.black.opacity(0.3))
-                                .background(.ultraThinMaterial)
-                        )
-                        .clipShape(Capsule())
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                        .glassEffect(.regular.interactive(), in: .capsule)
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 12)

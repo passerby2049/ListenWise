@@ -30,8 +30,7 @@ struct SubtitleOverlay: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8))
                 .padding(.bottom, 48)
                 .padding(.horizontal, 40)
             }
