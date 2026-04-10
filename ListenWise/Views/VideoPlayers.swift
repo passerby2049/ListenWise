@@ -59,7 +59,10 @@ struct YouTubeEmbedPlayer: NSViewRepresentable {
                 ytd-masthead, #guide, tp-yt-app-drawer, ytd-mini-guide-renderer,
                 ytd-popup-container, #clarify-box, #panels, #ticker,
                 .ytp-paid-content-overlay, .ytp-chrome-top,
-                .ytp-cards-button, .ytp-ce-element { display:none!important; }
+                .ytp-cards-button, .ytp-ce-element,
+                .ytp-upnext, .ytp-autonav-endscreen-countdown-overlay,
+                .ytp-endscreen-content, .ytp-ce-covering-overlay,
+                .ytp-autonav-endscreen, .ytp-suggestion-set { display:none!important; }
                 #movie_player, .html5-video-player {
                     position:fixed!important; top:0!important; left:0!important;
                     width:100vw!important; height:100vh!important;
@@ -83,6 +86,32 @@ struct YouTubeEmbedPlayer: NSViewRepresentable {
             }
             apply();
             new MutationObserver(apply).observe(document.documentElement, {childList:true, subtree:true});
+
+            // Disable YouTube autoplay: toggle off the autoplay switch and cancel next-video navigation
+            function disableAutoplay() {
+                // Click the autoplay toggle off if it's on
+                var toggle = document.querySelector('.ytp-autonav-toggle-button[aria-checked="true"]');
+                if (toggle) toggle.click();
+                // Intercept YouTube's internal player API
+                var p = document.getElementById('movie_player');
+                if (p && p.cancelPlayback && !p._listenwise_patched) {
+                    p._listenwise_patched = true;
+                    var origNext = p.nextVideo;
+                    if (origNext) p.nextVideo = function() {};
+                }
+                // Fallback: pause on ended and prevent navigation
+                var v = document.querySelector('video');
+                if (v && !v._listenwise_ended) {
+                    v._listenwise_ended = true;
+                    v.addEventListener('ended', function(e) {
+                        e.stopImmediatePropagation();
+                        v.pause();
+                    }, true);
+                }
+            }
+            disableAutoplay();
+            setInterval(disableAutoplay, 2000);
+            new MutationObserver(disableAutoplay).observe(document.documentElement, {childList:true, subtree:true});
         })();
         """
         config.userContentController.addUserScript(

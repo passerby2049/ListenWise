@@ -253,7 +253,7 @@ struct WordFlowView: View {
                 ForEach(segment.tokenIndices, id: \.self) { idx in
                     if idx == lastIdx && !lastTrailing.isEmpty {
                         Text(lastCore)
-                            .foregroundStyle(Color.primary)
+                            .foregroundStyle(textColor)
                             .background(
                                 GeometryReader { geo in
                                     Color.clear.preference(
