@@ -57,46 +57,38 @@ enum YouTubeHelper {
         return nil
     }
 
-    // MARK: - curl Helper
+    // MARK: - HTTP Helper
 
-    /// Run curl and return stdout as String. Uses curl instead of URLSession
-    /// because YouTube's bot detection blocks URLSession from sandboxed apps.
-    private static func curlGet(_ url: String, headers: [String] = []) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        var args = ["-s", "-L", url]
-        for h in headers { args += ["-H", h] }
-        process.arguments = args
+    /// Shared ephemeral session with browser-like defaults. YouTube's bot
+    /// detection rejects the default CFNetwork User-Agent, so we always
+    /// present as desktop Safari unless a call site overrides it. This is
+    /// what the old curl-subprocess helpers were really working around.
+    private static let httpSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpAdditionalHeaders = [
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        ]
+        return URLSession(configuration: config)
+    }()
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+    private static func httpGet(_ urlString: String, headers: [String: String] = [:]) async throws -> String {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        let (data, _) = try await httpSession.data(for: req)
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    /// Run curl POST and return stdout as String.
-    /// Writes body to a temp file to avoid argument escaping issues.
-    private static func curlPost(_ url: String, body: String, headers: [String] = []) throws -> String {
-        // Write body to temp file
-        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-        try body.write(to: tempFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tempFile) }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        var args = ["-s", "-L", "-X", "POST", "--data-binary", "@\(tempFile.path)", url]
-        for h in headers { args += ["-H", h] }
-        process.arguments = args
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+    private static func httpPost(_ urlString: String, body: String, headers: [String: String] = [:]) async throws -> String {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.httpBody = body.data(using: .utf8)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        let (data, _) = try await httpSession.data(for: req)
         return String(data: data, encoding: .utf8) ?? ""
     }
 
@@ -104,14 +96,11 @@ enum YouTubeHelper {
 
     /// Scrape the YouTube watch page to extract visitorData and signatureTimestamp.
     /// These are required for ANDROID_VR client to return downloadable URLs.
-    /// Uses curl to avoid YouTube's bot detection on sandboxed URLSession.
     static func scrapeWatchPage(for urlString: String) async throws -> PageInfo {
         guard let videoID = extractVideoID(urlString) else { throw URLError(.badURL) }
 
-        // Fetch watch page HTML via curl
-        let html = try curlGet(
-            "https://youtube.com/watch?v=\(videoID)&bpctr=9999999999&has_verified=1",
-            headers: ["User-Agent: Mozilla/5.0", "Accept-Language: en-US,en"]
+        let html = try await httpGet(
+            "https://youtube.com/watch?v=\(videoID)&bpctr=9999999999&has_verified=1"
         )
 
         guard !html.isEmpty else {
@@ -140,10 +129,7 @@ enum YouTubeHelper {
             let jsAfter = html[jsMatch.lowerBound...]
             if let endQuote = jsAfter.range(of: "\"") {
                 let jsPath = String(jsAfter[..<endQuote.lowerBound])
-                let jsContent = try curlGet(
-                    "https://youtube.com\(jsPath)",
-                    headers: ["User-Agent: Mozilla/5.0"]
-                )
+                let jsContent = try await httpGet("https://youtube.com\(jsPath)")
                 if let stsRange = jsContent.range(of: "signatureTimestamp:") ??
                     jsContent.range(of: "sts:") {
                     let after = jsContent[stsRange.upperBound...]
@@ -165,12 +151,11 @@ enum YouTubeHelper {
         guard let videoID = extractVideoID(urlString) else { return nil }
         let body = "{\"contentCheckOk\":true,\"context\":{\"client\":{\"clientName\":\"IOS\",\"clientVersion\":\"21.13.6\",\"deviceMake\":\"Apple\",\"deviceModel\":\"iPhone16,2\",\"hl\":\"en\",\"osName\":\"iPhone\",\"osVersion\":\"26.4.23E246\",\"userAgent\":\"com.google.ios.youtube/21.13.6 (iPhone16,2; U; CPU iOS 26_4 like Mac OS X;)\",\"utcOffsetMinutes\":0}},\"playbackContext\":{\"contentPlaybackContext\":{\"html5Preference\":\"HTML5_PREF_WANTS\"}},\"racyCheckOk\":true,\"videoId\":\"\(videoID)\"}"
 
-        guard let response = try? curlPost(
+        guard let response = try? await httpPost(
             "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
             body: body,
             headers: [
-                "Content-Type: application/json",
-                "User-Agent: com.google.ios.youtube/21.13.6 (iPhone16,2; U; CPU iOS 26_4 like Mac OS X;)"
+                "User-Agent": "com.google.ios.youtube/21.13.6 (iPhone16,2; U; CPU iOS 26_4 like Mac OS X;)"
             ]
         ), let data = response.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -275,16 +260,15 @@ enum YouTubeHelper {
         let stsValue = signatureTimestamp.map { String($0) } ?? "null"
         let bodyJSON = "{\"context\":{\"client\":{\"clientName\":\"ANDROID_VR\",\"clientVersion\":\"1.65.10\",\"androidSdkVersion\":32,\"deviceModel\":\"Quest 3\"}},\"videoId\":\"\(videoID)\",\"playbackContext\":{\"contentPlaybackContext\":{\"html5Preference\":\"HTML5_PREF_WANTS\",\"signatureTimestamp\":\(stsValue)}},\"contentCheckOk\":true,\"racyCheckOk\":true}"
 
-        guard let response = try? curlPost(
+        guard let response = try? await httpPost(
             "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
             body: bodyJSON,
             headers: [
-                "Content-Type: application/json",
-                "User-Agent: com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-                "X-Goog-Visitor-Id: \(visitorData)",
-                "X-Youtube-Client-Version: 1.65.10",
-                "X-Youtube-Client-Name: 28",
-                "Origin: https://www.youtube.com"
+                "User-Agent": "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+                "X-Goog-Visitor-Id": visitorData,
+                "X-Youtube-Client-Version": "1.65.10",
+                "X-Youtube-Client-Name": "28",
+                "Origin": "https://www.youtube.com"
             ]
         ), let data = response.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -355,16 +339,15 @@ enum YouTubeHelper {
         let stsValue = signatureTimestamp.map { String($0) } ?? "null"
         let bodyJSON = "{\"context\":{\"client\":{\"clientName\":\"ANDROID_VR\",\"clientVersion\":\"1.65.10\",\"androidSdkVersion\":32,\"deviceModel\":\"Quest 3\"}},\"videoId\":\"\(videoID)\",\"playbackContext\":{\"contentPlaybackContext\":{\"html5Preference\":\"HTML5_PREF_WANTS\",\"signatureTimestamp\":\(stsValue)}},\"contentCheckOk\":true,\"racyCheckOk\":true}"
 
-        let response = try curlPost(
+        let response = try await httpPost(
             "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
             body: bodyJSON,
             headers: [
-                "Content-Type: application/json",
-                "User-Agent: com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-                "X-Goog-Visitor-Id: \(visitorData)",
-                "X-Youtube-Client-Version: 1.65.10",
-                "X-Youtube-Client-Name: 28",
-                "Origin: https://www.youtube.com"
+                "User-Agent": "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+                "X-Goog-Visitor-Id": visitorData,
+                "X-Youtube-Client-Version": "1.65.10",
+                "X-Youtube-Client-Name": "28",
+                "Origin": "https://www.youtube.com"
             ]
         )
 
@@ -410,9 +393,9 @@ enum YouTubeHelper {
         return AudioStreamInfo(title: title, url: audioURL, contentLength: contentLength)
     }
 
-    // MARK: - Step 4: Chunked Range Download via curl
+    // MARK: - Step 4: Chunked Range Download
 
-    /// Download file in 1MB chunks using curl with Range headers.
+    /// Download file in 1MB chunks via URLSession with Range headers.
     /// YouTube's CDN requires Range headers — full file requests return 403.
     static func downloadWithRangeChunks(
         from url: URL,
@@ -425,35 +408,21 @@ enum YouTubeHelper {
             throw NSError(domain: "YouTube", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown content length"])
         }
 
-        // Create output file
         FileManager.default.createFile(atPath: destination.path, contents: nil)
         let fileHandle = try FileHandle(forWritingTo: destination)
         defer { try? fileHandle.close() }
 
         var downloaded: Int64 = 0
-        let urlString = url.absoluteString
 
         while downloaded < contentLength {
             let rangeEnd = min(downloaded + chunkSize - 1, contentLength - 1)
-
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-            process.arguments = ["-s", "-L", "-H", "Range: bytes=\(downloaded)-\(rangeEnd)", urlString]
-
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.standardOutput = outPipe
-            process.standardError = errPipe
-
-            try process.run()
-            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-
-            guard process.terminationStatus == 0, !data.isEmpty else {
-                throw NSError(domain: "YouTube", code: Int(process.terminationStatus),
+            var req = URLRequest(url: url)
+            req.setValue("bytes=\(downloaded)-\(rangeEnd)", forHTTPHeaderField: "Range")
+            let (data, _) = try await httpSession.data(for: req)
+            guard !data.isEmpty else {
+                throw NSError(domain: "YouTube", code: -1,
                               userInfo: [NSLocalizedDescriptionKey: "Download failed at byte \(downloaded)"])
             }
-
             fileHandle.write(data)
             downloaded += Int64(data.count)
             progress(downloaded, contentLength)
