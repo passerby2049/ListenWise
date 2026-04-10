@@ -98,8 +98,10 @@ struct SentenceExplanation: Codable, Identifiable {
 struct WordCardListView: View {
     let explanations: [WordExplanation]
     var sentenceExplanations: [SentenceExplanation] = []
+    var globalOnlyWords: Set<String> = []
     var onDeleteWord: ((String) -> Void)? = nil
     var onDeleteSentence: ((String) -> Void)? = nil
+    var onRefreshWord: ((String) -> Void)? = nil
 
     private var sortedExplanations: [WordExplanation] {
         explanations.sorted { $0.word.localizedCaseInsensitiveCompare($1.word) == .orderedAscending }
@@ -108,16 +110,72 @@ struct WordCardListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(sentenceExplanations) { item in
-                SentenceCardView(explanation: item, onDelete: onDeleteSentence)
-                    .id(item.sentence.lowercased())
-                    .transition(.opacity)
+                SentenceCardView(
+                    explanation: item,
+                    isGlobal: globalOnlyWords.contains(item.sentence.lowercased()),
+                    onDelete: { word in
+                        withAnimation(.easeInOut(duration: 0.25)) { onDeleteSentence?(word) }
+                    },
+                    onRefresh: { word in
+                        withAnimation(.easeInOut(duration: 0.25)) { onRefreshWord?(word) }
+                    }
+                )
+                .id(item.sentence.lowercased())
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                    removal: .opacity.combined(with: .move(edge: .trailing))
+                ))
             }
-            ForEach(Array(sortedExplanations.enumerated()), id: \.offset) { index, item in
-                WordCardView(explanation: item, onDelete: onDeleteWord)
-                    .id(item.word.lowercased())
-                    .transition(.opacity)
+            ForEach(sortedExplanations) { item in
+                WordCardView(
+                    explanation: item,
+                    isGlobal: globalOnlyWords.contains(item.word.lowercased()),
+                    onDelete: { word in
+                        withAnimation(.easeInOut(duration: 0.25)) { onDeleteWord?(word) }
+                    },
+                    onRefresh: { word in
+                        withAnimation(.easeInOut(duration: 0.25)) { onRefreshWord?(word) }
+                    }
+                )
+                .id(item.word.lowercased())
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                    removal: .opacity.combined(with: .move(edge: .trailing))
+                ))
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: explanations.map(\.word))
+        .animation(.easeInOut(duration: 0.25), value: sentenceExplanations.map(\.sentence))
+    }
+}
+
+// MARK: - Card Action Button (hover effect)
+
+struct CardActionButton: View {
+    let icon: String
+    let hoverColor: Color
+    let action: () -> Void
+    var help: String = ""
+    var rotationAngle: Double = 0
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isHovered ? hoverColor : .secondary)
+                .rotationEffect(.degrees(isHovered ? rotationAngle : 0))
+                .frame(width: 24, height: 24)
+                .background(isHovered ? hoverColor.opacity(0.12) : .clear)
+                .clipShape(Circle())
+                .scaleEffect(isHovered ? 1.15 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) { isHovered = hovering }
+        }
+        .help(help)
     }
 }
 
@@ -129,11 +187,13 @@ private let sharedSpeechSynthesizer = NSSpeechSynthesizer()
 
 struct WordCardView: View {
     let explanation: WordExplanation
+    var isGlobal: Bool = false
     var onDelete: ((String) -> Void)? = nil
+    var onRefresh: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Header: Word + Phonetic + POS + Speak + Delete
+            // Header: Word + Phonetic + POS + Speak + Refresh + Delete
             HStack(alignment: .center, spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.orange)
@@ -163,13 +223,11 @@ struct WordCardView: View {
                 }
                 .buttonStyle(.plain)
                 Spacer()
+                if let onRefresh {
+                    CardActionButton(icon: "arrow.clockwise", hoverColor: .orange, action: { onRefresh(explanation.word.lowercased()) }, help: "Refresh with current context", rotationAngle: 360)
+                }
                 if let onDelete {
-                    Button { onDelete(explanation.word.lowercased()) } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                    CardActionButton(icon: "xmark", hoverColor: .red, action: { onDelete(explanation.word.lowercased()) }, help: "Remove", rotationAngle: 90)
                 }
             }
             .padding(.bottom, 2)
@@ -183,8 +241,8 @@ struct WordCardView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
 
-            // Context block
-            if !explanation.context_usage.isEmpty {
+            // Context block — hide when from global vocab
+            if !isGlobal && !explanation.context_usage.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("IN CONTEXT")
                         .font(.system(size: 10, weight: .bold))
@@ -204,8 +262,8 @@ struct WordCardView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            // Original sentence from transcript + translation
-            if !explanation.sentence_target.isEmpty {
+            // Original sentence from transcript — hide when from global vocab
+            if !isGlobal && !explanation.sentence_target.isEmpty {
                 HStack(alignment: .top, spacing: 8) {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(Color.orange.opacity(0.5))
@@ -260,7 +318,7 @@ struct WordCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                .stroke(isGlobal ? Color.orange.opacity(0.3) : Color.secondary.opacity(0.2), lineWidth: 1)
         )
         .textSelection(.enabled)
     }
@@ -270,7 +328,9 @@ struct WordCardView: View {
 
 struct SentenceCardView: View {
     let explanation: SentenceExplanation
+    var isGlobal: Bool = false
     var onDelete: ((String) -> Void)? = nil
+    var onRefresh: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -287,13 +347,11 @@ struct SentenceCardView: View {
                     .background(Color.blue.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                 Spacer()
+                if let onRefresh {
+                    CardActionButton(icon: "arrow.clockwise", hoverColor: .blue, action: { onRefresh(explanation.sentence.lowercased()) }, help: "Refresh with current context", rotationAngle: 360)
+                }
                 if let onDelete {
-                    Button { onDelete(explanation.sentence.lowercased()) } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                    CardActionButton(icon: "xmark", hoverColor: .red, action: { onDelete(explanation.sentence.lowercased()) }, help: "Remove", rotationAngle: 90)
                 }
             }
             .padding(.bottom, 2)

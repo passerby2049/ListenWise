@@ -98,12 +98,13 @@ extension TranscriptView {
                     Spacer()
                     HStack(spacing: 8) {
                         Button {
-                            vm.markedWords.removeAll()
-                            vm.wordLearningResponse = ""
-                            vm.wordExplanations = []
-                            vm.sentenceExplanations = []
-                            vm.queriedWords = []
-                            vm.saveLearnProgress()
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                vm.clearAllMarkedWords()
+                                vm.wordLearningResponse = ""
+                                vm.wordExplanations = []
+                                vm.sentenceExplanations = []
+                                vm.saveLearnProgress()
+                            }
                         } label: {
                             Text("Clear").font(.system(size: 12))
                                 .padding(.horizontal, 8).padding(.vertical, 4)
@@ -145,11 +146,12 @@ extension TranscriptView {
                                 WordChipView(word: word, onTap: {
                                     vm.vocabScrollTarget = word
                                 }, onRemove: {
-                                    vm.markedWords.remove(word)
-                                    vm.queriedWords.remove(word)
-                                    vm.wordExplanations.removeAll { $0.word.lowercased() == word }
-                                    vm.sentenceExplanations.removeAll { $0.sentence.lowercased() == word }
-                                    vm.saveLearnProgress()
+                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                        vm.removeMarkedWord(word)
+                                        vm.wordExplanations.removeAll { $0.word.lowercased() == word }
+                                        vm.sentenceExplanations.removeAll { $0.sentence.lowercased() == word }
+                                        vm.saveLearnProgress()
+                                    }
                                 })
                             }
                         }
@@ -187,23 +189,21 @@ extension TranscriptView {
                 WordCardListView(
                     explanations: vm.wordExplanations,
                     sentenceExplanations: vm.sentenceExplanations,
+                    globalOnlyWords: vm.globalOnlyWords,
                     onDeleteWord: { word in
                         vm.wordExplanations.removeAll { $0.word.lowercased() == word }
-                        if vm.markedWords.contains(word) {
-                            vm.markedWords.remove(word)
-                            vm.queriedWords.remove(word)
-                        }
+                        vm.removeMarkedWord(word)
                         vm.rebuildWordLearningResponse()
                         vm.saveLearnProgress()
                     },
                     onDeleteSentence: { sentence in
                         vm.sentenceExplanations.removeAll { $0.sentence.lowercased() == sentence }
-                        if vm.markedWords.contains(sentence) {
-                            vm.markedWords.remove(sentence)
-                            vm.queriedWords.remove(sentence)
-                        }
+                        vm.removeMarkedWord(sentence)
                         vm.rebuildSentenceLearningResponse()
                         vm.saveLearnProgress()
+                    },
+                    onRefreshWord: { word in
+                        vm.refreshWord(word)
                     }
                 )
             } else if !vm.wordLearningResponse.isEmpty && !vm.isLoadingWordHelp {

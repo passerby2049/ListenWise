@@ -64,6 +64,8 @@ class TranscriptViewModel {
     // MARK: - Learning
 
     var markedWords: Set<String> = []
+    /// Words whose explanations came from global vocab (not queried in this story).
+    var globalOnlyWords: Set<String> = []
     var wordLearningResponse = ""
     var wordExplanations: [WordExplanation] = []
     var sentenceExplanations: [SentenceExplanation] = []
@@ -212,10 +214,38 @@ class TranscriptViewModel {
             showReorganized = true
             invalidateDisplayLines()
         }
-        if !story.savedMarkedWords.isEmpty { markedWords = story.savedMarkedWords }
+        // Restore per-story words, then merge global vocab words that appear in this transcript
+        markedWords = story.savedMarkedWords
         wordLearningResponse = story.savedWordLearningResponse
+        // Normalize stale empty-array JSON from older saves
+        if wordLearningResponse.trimmingCharacters(in: .whitespacesAndNewlines) == "[]" {
+            wordLearningResponse = ""
+        }
         if !wordLearningResponse.isEmpty { parseWordExplanations() }
         if !story.savedSentenceLearningResponse.isEmpty { parseSentenceExplanations(story.savedSentenceLearningResponse) }
+
+        // Auto-mark global vocab words found in this transcript
+        let globalMatches = GlobalVocabulary.shared.matchingWords(in: displayLines)
+        let newFromGlobal = globalMatches.subtracting(markedWords)
+        if !newFromGlobal.isEmpty {
+            markedWords.formUnion(newFromGlobal)
+            let global = GlobalVocabulary.shared
+            for word in newFromGlobal {
+                if let exp = global.wordExplanations[word] {
+                    if !wordExplanations.contains(where: { $0.word.lowercased() == word }) {
+                        wordExplanations.append(exp)
+                        globalOnlyWords.insert(word)
+                        queriedWords.insert(word)
+                    }
+                } else if let exp = global.sentenceExplanations[word] {
+                    if !sentenceExplanations.contains(where: { $0.sentence.lowercased() == word }) {
+                        sentenceExplanations.append(exp)
+                        globalOnlyWords.insert(word)
+                        queriedWords.insert(word)
+                    }
+                }
+            }
+        }
         translatedText = story.savedTranslation
         if !translatedText.isEmpty {
             if let data = translatedText.data(using: .utf8),
@@ -392,16 +422,38 @@ class TranscriptViewModel {
     }
 
     func exportStory() {
-        do {
-            let url = try StoryStore.shared.exportToMarkdown(story)
-            NSWorkspace.shared.open(url.deletingLastPathComponent())
-        } catch {
-            print("Export failed: \(error)")
+        guard let url = try? StoryStore.shared.exportToMarkdown(story) else { return }
+        NSWorkspace.shared.open(url.deletingLastPathComponent())
+    }
+
+    func refreshWord(_ word: String) {
+        // Remove from queried so queryWordHelp will re-query it
+        queriedWords.remove(word)
+        globalOnlyWords.remove(word)
+        wordExplanations.removeAll { $0.word.lowercased() == word }
+        sentenceExplanations.removeAll { $0.sentence.lowercased() == word }
+        startWordHelp()
+    }
+
+    func removeMarkedWord(_ word: String) {
+        markedWords.remove(word)
+        queriedWords.remove(word)
+        globalOnlyWords.remove(word)
+        GlobalVocabulary.shared.remove(word)
+    }
+
+    func clearAllMarkedWords() {
+        for word in markedWords {
+            GlobalVocabulary.shared.remove(word)
         }
+        markedWords.removeAll()
+        queriedWords.removeAll()
+        globalOnlyWords.removeAll()
     }
 
     func saveLearnProgress() {
         story.savedMarkedWords = markedWords
+        GlobalVocabulary.shared.addAll(markedWords)
         story.savedWordLearningResponse = wordLearningResponse
         rebuildSentenceLearningResponse()
         if !translationPairs.isEmpty, let data = try? JSONEncoder().encode(translationPairs),
@@ -477,7 +529,8 @@ class TranscriptViewModel {
             batchEnd = max(batchEnd, cursor + 1)
             batchEnd = min(batchEnd, cards.count)
             let batchCards = Array(cards[cursor..<batchEnd])
-            let totalBatchesEstimate = max(batchIndex, Int(ceil((cards.last!.end - cards[cursor].start) / batchInterval)) + batchIndex - 1)
+            let remainingDuration = (cards.last?.end ?? cards[cursor].start) - cards[cursor].start
+            let totalBatchesEstimate = max(batchIndex, Int(ceil(remainingDuration / batchInterval)) + batchIndex - 1)
             reorganizeProgress = "Processing batch \(batchIndex)/~\(totalBatchesEstimate)..."
             let numberedCards = batchCards.enumerated().map { i, card in "[\(i)] \(card.text)" }.joined(separator: "\n")
             let prompt = """
@@ -637,9 +690,13 @@ class TranscriptViewModel {
         if let response: LearningResponse = parseLLMJSONObject(raw) {
             if let words = response.words, !words.isEmpty {
                 wordExplanations.insert(contentsOf: words, at: 0)
+                GlobalVocabulary.shared.saveExplanations(words)
+                for w in words { globalOnlyWords.remove(w.word.lowercased()) }
             }
             if let sentences = response.sentences, !sentences.isEmpty {
                 sentenceExplanations.insert(contentsOf: sentences, at: 0)
+                GlobalVocabulary.shared.saveSentenceExplanations(sentences)
+                for s in sentences { globalOnlyWords.remove(s.sentence.lowercased()) }
             }
             queriedWords.formUnion(items)
             rebuildWordLearningResponse()
@@ -659,19 +716,23 @@ class TranscriptViewModel {
     func parseWordExplanations() {
         if let parsed: [WordExplanation] = parseLLMJSON(wordLearningResponse) {
             wordExplanations = parsed
-            queriedWords = Set(parsed.map { $0.word.lowercased() })
+            queriedWords.formUnion(parsed.map { $0.word.lowercased() })
         }
     }
 
     func rebuildWordLearningResponse() {
-        if let data = try? JSONEncoder().encode(wordExplanations),
+        if wordExplanations.isEmpty {
+            wordLearningResponse = ""
+        } else if let data = try? JSONEncoder().encode(wordExplanations),
            let str = String(data: data, encoding: .utf8) {
             wordLearningResponse = str
         }
     }
 
     func rebuildSentenceLearningResponse() {
-        if let data = try? JSONEncoder().encode(sentenceExplanations),
+        if sentenceExplanations.isEmpty {
+            story.savedSentenceLearningResponse = ""
+        } else if let data = try? JSONEncoder().encode(sentenceExplanations),
            let str = String(data: data, encoding: .utf8) {
             story.savedSentenceLearningResponse = str
         }
