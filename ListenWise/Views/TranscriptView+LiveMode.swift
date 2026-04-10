@@ -8,21 +8,6 @@ import AppKit
 
 extension TranscriptView {
 
-    var isLiveMode: Bool {
-        story.isLiveStream
-    }
-
-    func saveLiveSegments() {
-        guard !liveTranscriber.segments.isEmpty else { return }
-        story.savedLiveSegments = liveTranscriber.segments
-        story.text = AttributedString(liveTranscriber.confirmedText)
-        story.savedTranslation = liveTranscriber.segments
-            .filter { !$0.translation.isEmpty }
-            .map { "\($0.source)\n\($0.translation)" }
-            .joined(separator: "\n\n")
-        StoryStore.shared.save(story)
-    }
-
     // MARK: - Live Stream Input Sheet
 
     @ViewBuilder
@@ -49,19 +34,9 @@ extension TranscriptView {
                 Button("Start") {
                     let url = liveStreamURLText.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !url.isEmpty, let videoID = YouTubeHelper.extractVideoID(url) else { return }
-                    story.youtubeURL = url
-                    story.isLiveStream = true
-                    story.title = "Live Stream"
-                    story.isDone = true
-                    StoryStore.shared.save(story)
+                    vm.configureLiveStream(url: url, videoID: videoID)
                     isShowingLiveStreamInput = false
                     liveStreamURLText = ""
-                    Task {
-                        if let title = await YouTubeHelper.fetchTitle(videoID: videoID) {
-                            story.title = title
-                            StoryStore.shared.save(story)
-                        }
-                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -74,20 +49,19 @@ extension TranscriptView {
     // MARK: - Live Transcript Area
 
     var liveTranscriptArea: some View {
-        VStack(spacing: 0) {
-            // Control bar: transcribe + translate + copy
+        @Bindable var vm = vm
+        return VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Spacer()
 
-                // Start/Stop transcription
                 Button {
                     Task {
                         if liveTranscriber.isRunning {
                             let _ = await liveTranscriber.stop()
-                            saveLiveSegments()
+                            vm.saveLiveSegments(liveTranscriber: liveTranscriber)
                         } else {
                             do {
-                                liveTranscriber.translateEnabled = liveTranslateEnabled
+                                liveTranscriber.translateEnabled = vm.liveTranslateEnabled
                                 liveTranscriber.translateTargetLang = story.targetLanguage
                                 try await liveTranscriber.start()
                             } catch {
@@ -117,18 +91,18 @@ extension TranscriptView {
                 .background(liveTranscriber.isRunning ? Color.red.opacity(0.15) : preferences.accentColor)
                 .clipShape(Capsule())
 
-                Toggle(isOn: $liveTranslateEnabled) {
-                    Label("Translate", systemImage: liveTranslateEnabled ? "character.bubble.fill" : "character.bubble")
+                Toggle(isOn: $vm.liveTranslateEnabled) {
+                    Label("Translate", systemImage: vm.liveTranslateEnabled ? "character.bubble.fill" : "character.bubble")
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .toggleStyle(.button)
                 .buttonStyle(.plain)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 5)
-                .background(liveTranslateEnabled ? preferences.accentColor : Color.secondary.opacity(0.18))
-                .foregroundStyle(liveTranslateEnabled ? .white : .secondary)
+                .background(vm.liveTranslateEnabled ? preferences.accentColor : Color.secondary.opacity(0.18))
+                .foregroundStyle(vm.liveTranslateEnabled ? .white : .secondary)
                 .clipShape(Capsule())
-                .onChange(of: liveTranslateEnabled) { _, newValue in
+                .onChange(of: vm.liveTranslateEnabled) { _, newValue in
                     liveTranscriber.translateEnabled = newValue
                 }
 
@@ -167,13 +141,13 @@ extension TranscriptView {
 
     // MARK: - Live Transcript Content
 
-    /// Hash of live transcript state for triggering auto-scroll.
     var liveScrollTrigger: String {
         "\(liveTranscriber.segments.count)|\(liveTranscriber.confirmedText.count)|\(liveTranscriber.volatileText.count)|\(liveTranscriber.segments.last?.translation.count ?? 0)"
     }
 
     @ViewBuilder
     func liveTranscriptView(proxy: ScrollViewProxy) -> some View {
+        @Bindable var vm = vm
         let segments = liveTranscriber.segments
         let volatile = liveTranscriber.volatileText
         VStack(alignment: .leading, spacing: 6) {
@@ -189,7 +163,7 @@ extension TranscriptView {
             } else {
                 ForEach(Array(segments.enumerated()), id: \.offset) { idx, seg in
                     VStack(alignment: .leading, spacing: 2) {
-                        WordFlowView(text: seg.source, markedWords: $markedWords)
+                        WordFlowView(text: seg.source, markedWords: $vm.markedWords)
                             .font(.system(size: 16))
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if !seg.translation.isEmpty {

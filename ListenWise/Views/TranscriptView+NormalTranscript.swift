@@ -20,31 +20,31 @@ extension TranscriptView {
                 HStack(spacing: 2) {
                     ForEach(TranscriptTab.allCases, id: \.self) { tab in
                         Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { transcriptTab = tab }
-                            if let idx = currentLineIndex {
+                            withAnimation(.easeInOut(duration: 0.2)) { vm.transcriptTab = tab }
+                            if let idx = vm.currentLineIndex {
                                 let saved = idx
-                                currentLineIndex = nil
+                                vm.currentLineIndex = nil
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    currentLineIndex = saved
+                                    vm.currentLineIndex = saved
                                 }
                             }
                         } label: {
                             Text(tab.rawValue)
-                                .font(.system(size: 11, weight: transcriptTab == tab ? .semibold : .medium))
+                                .font(.system(size: 11, weight: vm.transcriptTab == tab ? .semibold : .medium))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 4)
                                 .background(
-                                    transcriptTab == tab
+                                    vm.transcriptTab == tab
                                         ? AnyShapeStyle(.background)
                                         : AnyShapeStyle(.clear)
                                 )
                                 .clipShape(Capsule())
-                                .shadow(color: transcriptTab == tab ? Color.black.opacity(0.1) : .clear, radius: 1, y: 1)
+                                .shadow(color: vm.transcriptTab == tab ? Color.black.opacity(0.1) : .clear, radius: 1, y: 1)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(transcriptTab == tab ? .primary : .secondary)
-                        .disabled(tab == .bilingual && !showReorganized)
-                        .opacity(tab == .bilingual && !showReorganized ? 0.4 : 1)
+                        .foregroundStyle(vm.transcriptTab == tab ? .primary : .secondary)
+                        .disabled(tab == .bilingual && !vm.showReorganized)
+                        .opacity(tab == .bilingual && !vm.showReorganized ? 0.4 : 1)
                     }
                 }
                 .padding(2)
@@ -58,36 +58,36 @@ extension TranscriptView {
                     ForEach([(false, "Raw"), (true, "AI Reorganized")], id: \.0) { value, label in
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                showReorganized = value
-                                if !value && transcriptTab == .bilingual {
-                                    transcriptTab = .original
+                                vm.showReorganized = value
+                                if !value && vm.transcriptTab == .bilingual {
+                                    vm.transcriptTab = .original
                                 }
-                                if value && reorganizedCards.isEmpty && !isReorganizing {
-                                    fixTask = Task { await reorganizeTranscript() }
+                                if value && vm.reorganizedCards.isEmpty && !vm.isReorganizing {
+                                    vm.startReorganize()
                                 }
-                                if let idx = currentLineIndex {
+                                if let idx = vm.currentLineIndex {
                                     let saved = idx
-                                    currentLineIndex = nil
+                                    vm.currentLineIndex = nil
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        currentLineIndex = saved
+                                        vm.currentLineIndex = saved
                                     }
                                 }
                             }
                         } label: {
                             Text(label)
-                                .font(.system(size: 11, weight: showReorganized == value ? .semibold : .medium))
+                                .font(.system(size: 11, weight: vm.showReorganized == value ? .semibold : .medium))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 4)
                                 .background(
-                                    showReorganized == value
+                                    vm.showReorganized == value
                                         ? AnyShapeStyle(.background)
                                         : AnyShapeStyle(.clear)
                                 )
                                 .clipShape(Capsule())
-                                .shadow(color: showReorganized == value ? Color.black.opacity(0.1) : .clear, radius: 1, y: 1)
+                                .shadow(color: vm.showReorganized == value ? Color.black.opacity(0.1) : .clear, radius: 1, y: 1)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(showReorganized == value ? .primary : .secondary)
+                        .foregroundStyle(vm.showReorganized == value ? .primary : .secondary)
                     }
                 }
                 .padding(2)
@@ -96,10 +96,10 @@ extension TranscriptView {
                 .disabled(!story.isDone)
 
                 // AI Reorganize button
-                if isReorganizing {
+                if vm.isReorganizing {
                     Button {
-                        fixTask?.cancel()
-                        isReorganizing = false
+                        vm.reorganizeTask?.cancel()
+                        vm.isReorganizing = false
                     } label: {
                         Label("Stop", systemImage: "stop.fill")
                             .font(.system(size: 11, weight: .semibold))
@@ -112,7 +112,7 @@ extension TranscriptView {
                     .clipShape(Capsule())
                 } else {
                     Button {
-                        fixTask = Task { await reorganizeTranscript() }
+                        vm.startReorganize()
                     } label: {
                         Label("AI Reorganize", systemImage: "wand.and.stars")
                             .font(.system(size: 11, weight: .semibold))
@@ -123,17 +123,17 @@ extension TranscriptView {
                     .foregroundStyle(.white)
                     .background(preferences.accentColor)
                     .clipShape(Capsule())
-                    .disabled(!story.isDone || cachedSubtitleCards.isEmpty)
+                    .disabled(!story.isDone || vm.cachedSubtitleCards.isEmpty)
                     .help("AI Reorganize — merge fragments into proper sentences")
                 }
 
                 // Copy transcript text
                 Button {
                     let text: String
-                    if showReorganized && !reorganizedCards.isEmpty {
-                        text = reorganizedCards.map(\.text).joined(separator: "\n")
+                    if vm.showReorganized && !vm.reorganizedCards.isEmpty {
+                        text = vm.reorganizedCards.map(\.text).joined(separator: "\n")
                     } else {
-                        text = cachedSubtitleCards.map(\.text).joined(separator: "\n")
+                        text = vm.cachedSubtitleCards.map(\.text).joined(separator: "\n")
                     }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
@@ -147,7 +147,7 @@ extension TranscriptView {
                 .foregroundStyle(.secondary)
                 .background(Color.secondary.opacity(0.18))
                 .clipShape(Capsule())
-                .disabled(cachedSubtitleCards.isEmpty)
+                .disabled(vm.cachedSubtitleCards.isEmpty)
                 .help("Copy transcript text")
 
                 Spacer()
@@ -156,7 +156,7 @@ extension TranscriptView {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    if transcriptTab == .original {
+                    if vm.transcriptTab == .original {
                         transcriptTextView(proxy: proxy)
                             .padding(20)
                     } else {
@@ -167,9 +167,9 @@ extension TranscriptView {
                 .clipped()
             }
         }
-        .onChange(of: transcriptTab) { _, newTab in
-            if newTab == .bilingual && translationPairs.isEmpty && !isTranslatingLines {
-                Task { await translateByLines() }
+        .onChange(of: vm.transcriptTab) { _, newTab in
+            if newTab == .bilingual && vm.translationPairs.isEmpty && !vm.isTranslatingLines {
+                vm.startTranslate()
             }
         }
     }
@@ -178,37 +178,35 @@ extension TranscriptView {
 
     @ViewBuilder
     func translationTextView(proxy: ScrollViewProxy) -> some View {
+        @Bindable var vm = vm
         LazyVStack(alignment: .leading, spacing: 16) {
-            if showReorganized && !reorganizedCards.isEmpty {
-                let hasTranslation = reorganizedCards.contains { !$0.translation.isEmpty }
+            if vm.showReorganized && !vm.reorganizedCards.isEmpty {
+                let hasTranslation = vm.reorganizedCards.contains { !$0.translation.isEmpty }
                 if !hasTranslation {
                     HStack {
                         Text("Reorganize with translation first")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Button {
-                            reorganizedCards = []
-                            fixTask = Task { await reorganizeTranscript() }
+                            vm.reorganizedCards = []
+                            vm.startReorganize()
                         } label: {
-                            Label("Reorganize", systemImage: "wand.and.stars")
-                                .font(.caption)
+                            Label("Reorganize", systemImage: "wand.and.stars").font(.caption)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .buttonStyle(.bordered).controlSize(.small)
                     }
                 }
 
-                let active = currentLineIndex
-                ForEach(reorganizedCards.indices, id: \.self) { i in
+                let active = vm.currentLineIndex
+                ForEach(vm.reorganizedCards.indices, id: \.self) { i in
                     HStack(alignment: .top, spacing: 16) {
-                        timestampButton(index: i, isActive: i == active, startTime: reorganizedCards[i].start)
+                        timestampButton(index: i, isActive: i == active, startTime: vm.reorganizedCards[i].start)
                             .padding(.top, 3)
                         VStack(alignment: .leading, spacing: 6) {
-                            WordFlowView(text: reorganizedCards[i].text, markedWords: $markedWords, isActive: i == active)
+                            WordFlowView(text: vm.reorganizedCards[i].text, markedWords: $vm.markedWords, isActive: i == active)
                                 .font(.system(size: 18))
-                            if !reorganizedCards[i].translation.isEmpty {
-                                Text(reorganizedCards[i].translation)
+                            if !vm.reorganizedCards[i].translation.isEmpty {
+                                Text(vm.reorganizedCards[i].translation)
                                     .font(.system(size: 14))
                                     .foregroundStyle(.secondary)
                                     .opacity(i == active ? 1 : 0.7)
@@ -228,37 +226,31 @@ extension TranscriptView {
                         proxy.scrollTo("tr_\(idx)", anchor: .center)
                     }
                 }
-            } else if isTranslatingLines {
+            } else if vm.isTranslatingLines {
                 HStack {
                     ProgressView().controlSize(.small)
-                    Text("Translating...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("Translating...").font(.caption).foregroundStyle(.secondary)
                 }
-            } else if !translationPairs.isEmpty {
+            } else if !vm.translationPairs.isEmpty {
                 HStack {
                     Spacer()
                     Button {
-                        translationPairs = []
-                        translatedText = ""
-                        translateTask = Task { await translateByLines() }
+                        vm.translationPairs = []
+                        vm.translatedText = ""
+                        vm.startTranslate()
                     } label: {
-                        Label("Retranslate", systemImage: "arrow.counterclockwise")
-                            .font(.caption)
+                        Label("Retranslate", systemImage: "arrow.counterclockwise").font(.caption)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.bordered).controlSize(.small)
                 }
-                ForEach(translationPairs.indices, id: \.self) { i in
+                ForEach(vm.translationPairs.indices, id: \.self) { i in
                     VStack(alignment: .leading, spacing: 6) {
-                        WordFlowView(text: translationPairs[i].source, markedWords: $markedWords)
+                        WordFlowView(text: vm.translationPairs[i].source, markedWords: $vm.markedWords)
                             .font(.body)
-                        Text(translationPairs[i].target)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+                        Text(vm.translationPairs[i].target)
+                            .font(.body).foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6).padding(.horizontal, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
@@ -266,8 +258,8 @@ extension TranscriptView {
                     Text("Reorganize first to get translation with timestamps")
                         .foregroundStyle(.tertiary)
                     Button {
-                        fixTask = Task { await reorganizeTranscript() }
-                        transcriptTab = .original
+                        vm.startReorganize()
+                        vm.transcriptTab = .original
                     } label: {
                         Label("Reorganize", systemImage: "wand.and.stars")
                     }
@@ -279,48 +271,12 @@ extension TranscriptView {
         }
     }
 
-    // MARK: - Display Lines & Helpers
-
-    var displayLines: [String] {
-        let cards = activeSubtitleCards
-        if !cards.isEmpty {
-            return cards.map { $0.text }
-        }
-        return splitIntoSentences(String(story.text.characters))
-    }
-
-    func splitIntoSentences(_ text: String) -> [String] {
-        var sentences: [String] = []
-        var current = ""
-        for char in text {
-            current.append(char)
-            let sentenceEnders: Set<Character> = [".", "?", "!", "。", "？", "！"]
-            if sentenceEnders.contains(char) {
-                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { sentences.append(trimmed) }
-                current = ""
-            }
-        }
-        let remaining = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remaining.isEmpty { sentences.append(remaining) }
-        return sentences
-    }
-
-    func seekToLine(_ index: Int) {
-        let cards = activeSubtitleCards
-        guard index < cards.count else { return }
-        seek(to: cards[index].start)
-        if youtubeWebView != nil {
-            isPlaying = true
-        } else if !isPlaying {
-            togglePlayback()
-        }
-    }
+    // MARK: - Helpers
 
     @ViewBuilder
     func timestampButton(index: Int, isActive: Bool, startTime: Double) -> some View {
         Button {
-            seekToLine(index)
+            vm.seekToLine(index)
         } label: {
             let m = Int(startTime) / 60
             let s = Int(startTime) % 60
@@ -334,13 +290,14 @@ extension TranscriptView {
 
     @ViewBuilder
     func transcriptLine(index: Int, text: String, isActive: Bool, hasTimestamp: Bool, startTime: Double) -> some View {
+        @Bindable var vm = vm
         HStack(alignment: .top, spacing: 16) {
             if hasTimestamp {
                 timestampButton(index: index, isActive: isActive, startTime: startTime)
                     .padding(.top, 3)
             }
             VStack(alignment: .leading, spacing: 8) {
-                WordFlowView(text: text, markedWords: $markedWords, isActive: isActive)
+                WordFlowView(text: text, markedWords: $vm.markedWords, isActive: isActive)
                     .font(.system(size: 18))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -355,10 +312,10 @@ extension TranscriptView {
 
     @ViewBuilder
     func transcriptTextView(proxy: ScrollViewProxy) -> some View {
-        let lines = displayLines
-        let active = currentLineIndex
-        let cards = activeSubtitleCards
-        return LazyVStack(alignment: .leading, spacing: 4) {
+        let lines = vm.displayLines
+        let active = vm.currentLineIndex
+        let cards = vm.activeSubtitleCards
+        LazyVStack(alignment: .leading, spacing: 4) {
             ForEach(lines.indices, id: \.self) { i in
                 transcriptLine(
                     index: i,
