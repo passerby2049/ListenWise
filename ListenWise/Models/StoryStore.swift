@@ -60,7 +60,9 @@ class StoryStore {
             sourceLanguage: story.sourceLanguage,
             targetLanguage: story.targetLanguage,
             isLiveStream: story.isLiveStream ? true : nil,
-            liveSegments: story.savedLiveSegments.isEmpty ? nil : story.savedLiveSegments
+            liveSegments: story.savedLiveSegments.isEmpty ? nil : story.savedLiveSegments,
+            isFavorite: story.isFavorite ? true : nil,
+            tags: story.tags.isEmpty ? nil : story.tags
         )
         let file = storageDir.appendingPathComponent("\(story.id.uuidString).json")
         DispatchQueue.global(qos: .utility).async {
@@ -197,6 +199,8 @@ class StoryStore {
         story.targetLanguage = data.targetLanguage ?? "中文"
         story.isLiveStream = data.isLiveStream ?? false
         story.savedLiveSegments = data.liveSegments ?? []
+        story.isFavorite = data.isFavorite ?? false
+        story.tags = data.tags ?? []
 
         return story
     }
@@ -285,4 +289,6 @@ private struct StoryData: Codable {
     let targetLanguage: String?
     let isLiveStream: Bool?
     let liveSegments: [LiveSegment]?
+    let isFavorite: Bool?
+    let tags: [String]?
 }

@@ -50,6 +50,12 @@ class Story: Identifiable {
     /// Live transcription segments (source + translation pairs).
     var savedLiveSegments: [LiveSegment] = []
 
+    /// User-starred flag. Surfaced via the sidebar filter and context menu.
+    var isFavorite: Bool = false
+    /// Free-form tags. Persisted but no UI yet — reserved so a future tag
+    /// picker can land without a schema migration.
+    var tags: [String] = []
+
     /// Source language (for speech recognition and AI prompts).
     var sourceLanguage: String = "English"
     /// Target language (for translation).

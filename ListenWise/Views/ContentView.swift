@@ -7,22 +7,49 @@ The app's main view.
 
 import SwiftUI
 
+enum StoryFilter: Hashable {
+    case all
+    case favorites
+    // Reserved for a future tag picker — keeps the enum open for extension
+    // without forcing call sites to switch on a Bool.
+    case tag(String)
+}
+
 struct ContentView: View {
     @Environment(AppPreferences.self) private var preferences
     @Environment(DeepLinkRouter.self) private var deepLink
     @State private var selectionID: UUID?
     @State private var stories: [Story] = []
+    @State private var filter: StoryFilter = .all
     @State private var isShowingReview = false
     @State private var dueCount: Int = 0
+
+    private var filteredStories: [Story] {
+        switch filter {
+        case .all:
+            return stories
+        case .favorites:
+            return stories.filter { $0.isFavorite }
+        case .tag(let name):
+            return stories.filter { $0.tags.contains(name) }
+        }
+    }
 
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selectionID) {
-                ForEach(stories) { story in
+                ForEach(filteredStories) { story in
                     StoryRowView(story: story)
                         .tag(story.id)
                         .contextMenu {
+                            Button {
+                                toggleFavorite(story)
+                            } label: {
+                                Label(story.isFavorite ? "Unfavorite" : "Favorite",
+                                      systemImage: story.isFavorite ? "star.slash" : "star")
+                            }
+                            Divider()
                             Button(role: .destructive) {
                                 deleteStory(story)
                             } label: {
@@ -31,10 +58,14 @@ struct ContentView: View {
                         }
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                filterBar
+            }
             .navigationTitle("ListenWise")
             .toolbar {
                 ToolbarItem {
                     Button {
+                        if filter != .all { filter = .all }
                         let newStory = Story.blank()
                         stories.insert(newStory, at: 0)
                         selectionID = newStory.id
@@ -195,6 +226,73 @@ struct ContentView: View {
 
     // MARK: - Helpers
 
+    private var filterIconName: String {
+        switch filter {
+        case .all: return "folder"
+        case .favorites: return "star.fill"
+        case .tag: return "tag.fill"
+        }
+    }
+
+    private var filterLabel: String {
+        switch filter {
+        case .all: return "All Stories"
+        case .favorites: return "Favorites"
+        case .tag(let name): return name
+        }
+    }
+
+    @ViewBuilder
+    private var filterBar: some View {
+        VStack(spacing: 0) {
+            Menu {
+                Button {
+                    filter = .all
+                } label: {
+                    Label("All Stories", systemImage: filter == .all ? "checkmark" : "folder")
+                }
+                Button {
+                    filter = .favorites
+                } label: {
+                    Label("Favorites", systemImage: filter == .favorites ? "checkmark" : "star.fill")
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: filterIconName)
+                    Text(filterLabel)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(size: 13, weight: .medium))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                )
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+        }
+        .background(.bar)
+    }
+
+    /// Toggle the favorite flag and persist immediately. `Story` is a class,
+    /// so mutating a field doesn't trip `.onChange(of: stories)` — we call
+    /// the single-story save directly.
+    private func toggleFavorite(_ story: Story) {
+        story.isFavorite.toggle()
+        StoryStore.shared.save(story)
+    }
+
     func deleteStory(_ story: Story) {
         if selectionID == story.id { selectionID = nil }
         // Delete downloaded YouTube video file
@@ -249,9 +347,17 @@ private struct StoryRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(story.title)
-                .font(.body)
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(story.title)
+                    .font(.body)
+                    .lineLimit(1)
+                if story.isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.yellow)
+                        .accessibilityLabel("Favorite")
+                }
+            }
             HStack(spacing: 4) {
                 Image(systemName: icon)
                 Text(metaText)
