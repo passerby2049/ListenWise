@@ -62,7 +62,8 @@ struct YouTubeEmbedPlayer: NSViewRepresentable {
                 .ytp-cards-button, .ytp-ce-element,
                 .ytp-upnext, .ytp-autonav-endscreen-countdown-overlay,
                 .ytp-endscreen-content, .ytp-ce-covering-overlay,
-                .ytp-autonav-endscreen, .ytp-suggestion-set { display:none!important; }
+                .ytp-autonav-endscreen, .ytp-suggestion-set,
+                .caption-window, .ytp-caption-window-container { display:none!important; }
                 #movie_player, .html5-video-player {
                     position:fixed!important; top:0!important; left:0!important;
                     width:100vw!important; height:100vh!important;

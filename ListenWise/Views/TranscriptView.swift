@@ -31,8 +31,59 @@ struct TranscriptView: View {
         self.speechTranscriber = SpokenWordTranscriber(story: story)
     }
 
+    @AppStorage("InspectorWidth") private var inspectorWidth: Double = 360
+    @State private var dragStartWidth: Double = 360
+    @State private var isDraggingInspector = false
+
     var body: some View {
         @Bindable var vm = vm
+
+        #if os(macOS)
+        HStack(spacing: 0) {
+            primaryContent
+                .frame(minWidth: 460, maxWidth: .infinity)
+
+            if vm.showingInspector {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                    .contentShape(Rectangle().inset(by: -4))
+                    .pointerStyle(.columnResize)
+                    .gesture(
+                        DragGesture(coordinateSpace: .global)
+                            .onChanged { value in
+                                if !isDraggingInspector {
+                                    isDraggingInspector = true
+                                    dragStartWidth = inspectorWidth
+                                }
+                                let delta = -value.translation.width
+                                inspectorWidth = min(max(dragStartWidth + delta, 320), 500)
+                            }
+                            .onEnded { _ in isDraggingInspector = false }
+                    )
+                    .transition(.move(edge: .trailing))
+
+                inspectorPanelView
+                    .frame(width: inspectorWidth)
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        .navigationTitle(story.title)
+        .toolbar { toolbarContent }
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+        #else
+        primaryContent
+            .inspector(isPresented: $vm.showingInspector) {
+                inspectorPanelView
+                    .inspectorColumnWidth(min: 320, ideal: 380, max: 500)
+            }
+            .navigationTitle(story.title)
+            .toolbar { toolbarContent }
+        #endif
+    }
+    
+    @ViewBuilder
+    private var primaryContent: some View {
         Group {
             if isTranscribingFile {
                 transcribingView
@@ -42,13 +93,6 @@ struct TranscriptView: View {
                 importPromptView
             }
         }
-        .inspector(isPresented: $vm.showingInspector) {
-            inspectorPanelView
-                .inspectorColumnWidth(min: 420, ideal: 450, max: 600)
-        }
-        .navigationTitle(story.title)
-        .toolbar { toolbarContent }
-        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .onChange(of: story.isDone) { _, isDone in
             if isDone {
                 vm.setupPlayer()
@@ -121,7 +165,11 @@ struct TranscriptView: View {
             .disabled(!story.isDone)
         }
         ToolbarItem(placement: .primaryAction) {
-            Button { vm.showingInspector.toggle() } label: {
+            Button { 
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                    vm.showingInspector.toggle() 
+                }
+            } label: {
                 Image(systemName: "sidebar.trailing")
             }
             .help(vm.showingInspector ? "Hide Inspector" : "Show Inspector")
@@ -306,51 +354,56 @@ struct TranscriptView: View {
 
     // MARK: - Unified Main Learning Stage
 
+    @AppStorage("VideoPlayerHeight") private var videoPlayerHeight: Double = 300
+    @State private var dragStartVideoHeight: Double = 300
+    @State private var isDraggingVideo = false
+
     @ViewBuilder
     var mainLearningStage: some View {
-        VStack(spacing: 0) {
-            if vm.sourceIsVideo {
+        if vm.sourceIsVideo {
+            VStack(spacing: 0) {
                 videoPlayerWithSubtitle
-                    .frame(height: vm.videoHeight)
+                    .frame(height: videoPlayerHeight)
                     .clipped()
 
                 Rectangle()
-                    .fill(Color.clear)
-                    .frame(height: 8)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
-                    }
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
+                    .contentShape(Rectangle().inset(by: -4))
+                    .pointerStyle(.rowResize)
                     .gesture(
                         DragGesture(coordinateSpace: .global)
                             .onChanged { value in
-                                if !vm.isDraggingVideo {
-                                    vm.isDraggingVideo = true
-                                    vm.dragStartY = value.startLocation.y
-                                    vm.dragStartHeight = vm.videoHeight
+                                if !isDraggingVideo {
+                                    isDraggingVideo = true
+                                    dragStartVideoHeight = videoPlayerHeight
                                 }
-                                let delta = value.location.y - vm.dragStartY
-                                vm.videoHeight = min(max(vm.dragStartHeight + delta, 150), 600)
+                                let delta = value.translation.height
+                                videoPlayerHeight = min(max(dragStartVideoHeight + delta, 150), 800)
                             }
-                            .onEnded { _ in vm.isDraggingVideo = false }
+                            .onEnded { _ in isDraggingVideo = false }
                     )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(Color.secondary.opacity(0.3))
-                            .frame(width: 36, height: 3)
-                    )
-            } else {
+
+                transcriptSection
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            VStack(spacing: 0) {
                 audioPlayerBar
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                 Divider()
+                transcriptSection
             }
+        }
+    }
 
-            if vm.isLiveMode {
-                liveTranscriptArea
-            } else {
-                normalTranscriptArea
-            }
+    @ViewBuilder
+    var transcriptSection: some View {
+        if vm.isLiveMode {
+            liveTranscriptArea
+        } else {
+            normalTranscriptArea
         }
     }
 

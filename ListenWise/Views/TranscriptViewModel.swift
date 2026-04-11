@@ -47,7 +47,9 @@ class TranscriptViewModel {
     var reorganizedCards: [ReorganizedCard] = []
     var isReorganizing = false
     var reorganizeProgress = ""
-    var showReorganized = false
+    var showReorganized = false {
+        didSet { invalidateDisplayLines() }
+    }
 
     // MARK: - Translation
 
@@ -123,20 +125,18 @@ class TranscriptViewModel {
         return cachedSubtitleCards
     }
 
-    private var _cachedDisplayLines: [String]?
+    private var _displayLinesVersion = 0
 
     var displayLines: [String] {
-        if let cached = _cachedDisplayLines { return cached }
+        // Access the version counter so @Observable tracks this dependency
+        _ = _displayLinesVersion
         let cards = activeSubtitleCards
-        let lines: [String]
-        if !cards.isEmpty { lines = cards.map { $0.text } }
-        else { lines = splitIntoSentences(String(story.text.characters)) }
-        _cachedDisplayLines = lines
-        return lines
+        if !cards.isEmpty { return cards.map { $0.text } }
+        return splitIntoSentences(String(story.text.characters))
     }
 
     func invalidateDisplayLines() {
-        _cachedDisplayLines = nil
+        _displayLinesVersion += 1
     }
 
     var transcriptContext: String {
