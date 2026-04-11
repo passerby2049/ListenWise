@@ -5,6 +5,18 @@ Shared app preferences used by SettingsView and shell UI.
 
 import SwiftUI
 
+struct GoogleAIKeyEntry: Codable, Identifiable, Hashable {
+    var id: UUID
+    var name: String
+    var key: String
+
+    init(id: UUID = UUID(), name: String, key: String) {
+        self.id = id
+        self.name = name
+        self.key = key
+    }
+}
+
 @Observable
 final class AppPreferences {
     var openRouterAPIKey: String {
@@ -20,6 +32,47 @@ final class AppPreferences {
     var anthropicAPIKey: String {
         get { UserDefaults.standard.string(forKey: "anthropicAPIKey") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "anthropicAPIKey") }
+    }
+
+    var googleAIKeys: [GoogleAIKeyEntry] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: "googleAIKeys"),
+                  let decoded = try? JSONDecoder().decode([GoogleAIKeyEntry].self, from: data)
+            else { return [] }
+            return decoded
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "googleAIKeys")
+            }
+        }
+    }
+
+    var googleAIActiveKeyID: UUID? {
+        get {
+            guard let str = UserDefaults.standard.string(forKey: "googleAIActiveKeyID"),
+                  let id = UUID(uuidString: str) else { return nil }
+            return id
+        }
+        set {
+            if let id = newValue {
+                UserDefaults.standard.set(id.uuidString, forKey: "googleAIActiveKeyID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "googleAIActiveKeyID")
+            }
+        }
+    }
+
+    /// Read-only: resolves the currently active Google AI API key string,
+    /// used by `AIProvider` for auth headers. If no key is marked active
+    /// but at least one entry exists, falls back to the first entry.
+    var googleAIAPIKey: String {
+        let keys = googleAIKeys
+        guard !keys.isEmpty else { return "" }
+        if let activeID = googleAIActiveKeyID, let match = keys.first(where: { $0.id == activeID }) {
+            return match.key
+        }
+        return keys.first?.key ?? ""
     }
 
     var defaultModel: String {

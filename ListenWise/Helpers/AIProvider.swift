@@ -1,7 +1,7 @@
 /*
 Abstract:
-Unified AI interface supporting OpenRouter (cloud) and
-Anthropic Messages-compatible endpoints.
+Unified AI interface supporting OpenRouter (cloud),
+Anthropic Messages-compatible endpoints, and Google AI Studio (Gemini).
 */
 
 import Foundation
@@ -9,9 +9,20 @@ import Foundation
 // MARK: - AI Provider
 
 struct AIProvider {
-    enum Provider {
+    enum Provider: String, CaseIterable, Identifiable {
         case openRouter
         case anthropic
+        case googleAI
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .openRouter: return "OpenRouter"
+            case .anthropic: return "Anthropic"
+            case .googleAI: return "Google AI Studio"
+            }
+        }
     }
 
     private static let prefs = AppPreferences()
@@ -21,10 +32,13 @@ struct AIProvider {
     }
 
     static let openRouterBase = URL(string: "https://openrouter.ai/api/v1")!
+    static let googleAIBase = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
 
     static var openRouterKey: String { prefs.openRouterAPIKey }
 
     static var anthropicKey: String { prefs.anthropicAPIKey }
+
+    static var googleAIKey: String { prefs.googleAIAPIKey }
 
     static let anthropicModels = [
         "claude-opus-4-6",
@@ -43,11 +57,35 @@ struct AIProvider {
         "minimax/minimax-m2.5:free",
     ]
 
+    /// Google AI Studio models — bare IDs without vendor prefix, which
+    /// distinguishes them from OpenRouter's `google/gemini-*` entries.
+    /// Text-chat capable models only; image/audio/TTS/embedding variants
+    /// aren't applicable to ListenWise's LLM call sites.
+    static let googleAIModels = [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ]
+
     static func provider(for model: String) -> Provider {
+        if googleAIModels.contains(model) || (model.hasPrefix("gemini-") && !model.contains("/")) {
+            return .googleAI
+        }
         if anthropicModels.contains(model) || model.hasPrefix("claude-") {
             return .anthropic
         }
         return .openRouter
+    }
+
+    static func models(for provider: Provider) -> [String] {
+        switch provider {
+        case .openRouter: return openRouterModels
+        case .anthropic: return anthropicModels
+        case .googleAI: return googleAIModels
+        }
     }
 
     static func anthropicMessagesURL(from baseURL: URL) -> URL {
@@ -71,6 +109,8 @@ struct AIProvider {
             return streamOpenRouter(prompt: prompt, model: model)
         case .anthropic:
             return streamAnthropic(prompt: prompt, model: model)
+        case .googleAI:
+            return streamGoogleAI(prompt: prompt, model: model)
         }
     }
 
@@ -79,7 +119,7 @@ struct AIProvider {
     }
 
     static func availableModels() async -> [String] {
-        uniqueModels(anthropicModels + openRouterModels)
+        uniqueModels(anthropicModels + openRouterModels + googleAIModels)
     }
 
     private static func uniqueModels(_ models: [String]) -> [String] {
@@ -236,6 +276,70 @@ struct AIProvider {
                            let text = delta["text"] as? String,
                            !text.isEmpty {
                             continuation.yield(text)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    // MARK: - Google AI Studio (Gemini) Streaming
+
+    private static func streamGoogleAI(prompt: String, model: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                // Gemini path segments contain a literal `:streamGenerateContent`
+                // suffix; URLComponents handles the colon correctly, appendingPathComponent
+                // would percent-encode it.
+                guard let url = URL(string: "\(googleAIBase.absoluteString)/models/\(model):streamGenerateContent?alt=sse") else {
+                    continuation.finish(throwing: NSError(domain: "GoogleAI", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL for model \(model)"]))
+                    return
+                }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(googleAIKey, forHTTPHeaderField: "x-goog-api-key")
+                request.timeoutInterval = 300
+                let body: [String: Any] = [
+                    "contents": [
+                        ["role": "user", "parts": [["text": prompt]]]
+                    ]
+                ]
+                request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                        var responseBody = ""
+                        for try await line in bytes.lines { responseBody += line }
+                        let message = errorMessage(from: responseBody) ?? "HTTP \(http.statusCode)"
+                        continuation.finish(throwing: NSError(domain: "GoogleAI", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: message]))
+                        return
+                    }
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data: ") else { continue }
+                        let payload = String(line.dropFirst(6))
+                        guard let data = payload.data(using: .utf8),
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        else { continue }
+
+                        if let error = json["error"] as? [String: Any],
+                           let message = error["message"] as? String {
+                            continuation.finish(throwing: NSError(domain: "GoogleAI", code: 400, userInfo: [NSLocalizedDescriptionKey: message]))
+                            return
+                        }
+
+                        guard let candidates = json["candidates"] as? [[String: Any]],
+                              let content = candidates.first?["content"] as? [String: Any],
+                              let parts = content["parts"] as? [[String: Any]]
+                        else { continue }
+
+                        for part in parts {
+                            if let text = part["text"] as? String, !text.isEmpty {
+                                continuation.yield(text)
+                            }
                         }
                     }
                     continuation.finish()

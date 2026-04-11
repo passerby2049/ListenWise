@@ -15,6 +15,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case model = "Model"
     case openRouter = "OpenRouter"
     case anthropic = "Anthropic"
+    case googleAI = "Google AI Studio"
 
     var id: String { rawValue }
 
@@ -25,6 +26,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .model: return "cpu"
         case .openRouter: return "cloud"
         case .anthropic: return "server.rack"
+        case .googleAI: return "sparkles"
         }
     }
 }
@@ -40,6 +42,8 @@ struct SettingsView: View {
     @State private var anthropicBaseURL = "https://api.anthropic.com"
     @State private var anthropicAPIKey = ""
     @State private var defaultModel = "google/gemini-2.5-flash"
+    @State private var selectedProvider: AIProvider.Provider = .openRouter
+    @State private var modelsForProvider: [String] = []
 
     @State private var selectedAccentColor = "blue"
     private var currentAccentColor: Color {
@@ -55,8 +59,6 @@ struct SettingsView: View {
     @State private var isTestingOR = false
     @State private var testStatusAnthropic: String = ""
     @State private var isTestingAnthropic = false
-    @State private var availableModels: [String] = []
-    @State private var isLoadingModels = false
 
     var body: some View {
         NavigationSplitView {
@@ -74,6 +76,7 @@ struct SettingsView: View {
                 case .model: modelSection
                 case .openRouter: openRouterSection
                 case .anthropic: anthropicSection
+                case .googleAI: GoogleAIKeysSettingsSection()
                 }
             }
             .navigationSplitViewColumnWidth(min: 480, ideal: 580)
@@ -84,14 +87,22 @@ struct SettingsView: View {
             anthropicBaseURL = preferences.anthropicBaseURL
             anthropicAPIKey = preferences.anthropicAPIKey
             defaultModel = preferences.defaultModel
+            selectedProvider = AIProvider.provider(for: defaultModel)
+            modelsForProvider = AIProvider.models(for: selectedProvider)
             selectedEngine = preferences.selectedTranscriptionEngine
             selectedAccentColor = preferences.accentColorName
-            Task { await loadModels() }
         }
         .onChange(of: openRouterKey) { _, v in preferences.openRouterAPIKey = v }
         .onChange(of: anthropicBaseURL) { _, v in preferences.anthropicBaseURL = v }
         .onChange(of: anthropicAPIKey) { _, v in preferences.anthropicAPIKey = v }
         .onChange(of: defaultModel) { _, v in preferences.defaultModel = v }
+        .onChange(of: selectedProvider) { _, newProvider in
+            let list = AIProvider.models(for: newProvider)
+            modelsForProvider = list
+            if !list.contains(defaultModel), let first = list.first {
+                defaultModel = first
+            }
+        }
         .onChange(of: selectedEngine) { _, v in preferences.selectedTranscriptionEngine = v }
         .onChange(of: selectedAccentColor) { _, v in preferences.accentColorName = v }
     }
@@ -235,31 +246,38 @@ struct SettingsView: View {
     private var modelSection: some View {
         Form {
             Section {
-                Picker("Default Model", selection: $defaultModel) {
-                    if !availableModels.contains(defaultModel) {
+                Picker("Provider", selection: $selectedProvider) {
+                    ForEach(AIProvider.Provider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+
+                Picker("Model", selection: $defaultModel) {
+                    if !modelsForProvider.contains(defaultModel) {
                         Text(defaultModel).tag(defaultModel)
                     }
-                    ForEach(availableModels, id: \.self) { model in
+                    ForEach(modelsForProvider, id: \.self) { model in
                         Text(model).tag(model)
                     }
                 }
 
-                HStack {
-                    Button("Refresh Models") {
-                        Task { await loadModels() }
-                    }
-                    .disabled(isLoadingModels)
-                    if isLoadingModels {
-                        ProgressView().controlSize(.small)
-                    }
-                }
-
-                Text("OpenRouter models and Anthropic/relay models are listed together.")
+                Text(modelSectionFooter)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var modelSectionFooter: String {
+        switch selectedProvider {
+        case .openRouter:
+            return "Routed through OpenRouter's OpenAI-compatible API. Set the key in the OpenRouter section."
+        case .anthropic:
+            return "Calls the Anthropic Messages API (or a compatible relay). Set the key and base URL in the Anthropic section."
+        case .googleAI:
+            return "Calls Google AI Studio (Gemini) directly. Set the key in the Google AI Studio section."
+        }
     }
 
     // MARK: - OpenRouter
@@ -323,12 +341,6 @@ struct SettingsView: View {
     }
 
     // MARK: - Actions
-
-    func loadModels() async {
-        isLoadingModels = true
-        availableModels = await AIProvider.availableModels()
-        isLoadingModels = false
-    }
 
     func testOpenRouter() async {
         isTestingOR = true
