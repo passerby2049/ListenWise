@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppPreferences.self) private var preferences
+    @Environment(DeepLinkRouter.self) private var deepLink
     @State private var selectionID: UUID?
     @State private var stories: [Story] = []
     @State private var isShowingReview = false
@@ -75,11 +76,15 @@ struct ContentView: View {
                 .environment(preferences)
         }
         .onAppear {
-            if stories.isEmpty {
-                // Strip any blank stories that predate the auto-cleanup rule.
-                stories = StoryStore.shared.loadAll().filter { !$0.isBlank }
-            }
+            loadStoriesIfNeeded()
             refreshDueCount()
+            if deepLink.pendingYouTubeURL != nil {
+                openStoryForDeepLink()
+            }
+        }
+        .onChange(of: deepLink.pendingYouTubeURL) { _, newValue in
+            guard newValue != nil else { return }
+            openStoryForDeepLink()
         }
         .onChange(of: selectionID) { oldID, _ in
             discardBlankStory(withID: oldID)
@@ -148,6 +153,26 @@ struct ContentView: View {
 
     private func refreshDueCount() {
         dueCount = GlobalVocabulary.shared.dueCount()
+    }
+
+    @State private var didLoadStories = false
+
+    private func loadStoriesIfNeeded() {
+        guard !didLoadStories else { return }
+        didLoadStories = true
+        // Strip any blank stories that predate the auto-cleanup rule.
+        stories = StoryStore.shared.loadAll().filter { !$0.isBlank }
+    }
+
+    /// Spawn a new blank Story and select it so TranscriptView can consume
+    /// the pending YouTube URL via DeepLinkRouter. Safe to call before
+    /// `.onAppear` — loads persisted stories first so a cold-start deep
+    /// link cannot skip the load path via the `stories.isEmpty` guard.
+    private func openStoryForDeepLink() {
+        loadStoriesIfNeeded()
+        let newStory = Story.blank()
+        stories.insert(newStory, at: 0)
+        selectionID = newStory.id
     }
 
     // MARK: - Empty State

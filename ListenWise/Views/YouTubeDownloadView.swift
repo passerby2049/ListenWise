@@ -12,12 +12,14 @@ struct YouTubeDownloadView: View {
     @Binding var downloadedURL: URL?
     @Binding var youtubeSourceURL: String
     @Binding var youtubeStreamingURL: String
+    var initialURL: String? = nil
     @Environment(\.dismiss) var dismiss
 
     @State private var urlText: String = ""
     @State private var isDownloading = false
     @State private var progress: String = ""
     @State private var errorMessage: String = ""
+    @State private var didAutoStart = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -68,6 +70,12 @@ struct YouTubeDownloadView: View {
             }
         }
         .padding(24)
+        .onAppear {
+            guard !didAutoStart, let seed = initialURL, !seed.isEmpty else { return }
+            didAutoStart = true
+            urlText = seed
+            startDownload()
+        }
     }
 
     var isValidURL: Bool {

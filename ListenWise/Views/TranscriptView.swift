@@ -13,6 +13,7 @@ import AVFoundation
 struct TranscriptView: View {
     @Binding var story: Story
     @Environment(AppPreferences.self) var preferences
+    @Environment(DeepLinkRouter.self) var deepLink
     @State var vm: TranscriptViewModel
     @State var speechTranscriber: SpokenWordTranscriber
     @StateObject var liveTranscriber = LiveTranscriber()
@@ -24,6 +25,7 @@ struct TranscriptView: View {
     @State var isShowingLiveStreamInput = false
     @State var liveStreamURLText = ""
     @State var youtubeDownloadedURL: URL?
+    @State var youtubeInitialURL: String?
 
     init(story: Binding<Story>) {
         self._story = story
@@ -106,6 +108,11 @@ struct TranscriptView: View {
                 liveTranscriber.segments = story.savedLiveSegments
                 liveTranscriber.confirmedText = story.savedLiveSegments.map(\.source).joined(separator: "\n")
             }
+            if let pending = deepLink.pendingYouTubeURL, !story.isDone {
+                deepLink.pendingYouTubeURL = nil
+                youtubeInitialURL = pending
+                isShowingYouTubeDownload = true
+            }
         }
         .onDisappear {
             vm.saveLiveSegments(liveTranscriber: liveTranscriber)
@@ -134,8 +141,13 @@ struct TranscriptView: View {
                 print("file import failed: \(error)")
             }
         }
-        .sheet(isPresented: $isShowingYouTubeDownload) {
-            YouTubeDownloadView(downloadedURL: $youtubeDownloadedURL, youtubeSourceURL: $story.youtubeURL, youtubeStreamingURL: $story.youtubeStreamingURL)
+        .sheet(isPresented: $isShowingYouTubeDownload, onDismiss: { youtubeInitialURL = nil }) {
+            YouTubeDownloadView(
+                downloadedURL: $youtubeDownloadedURL,
+                youtubeSourceURL: $story.youtubeURL,
+                youtubeStreamingURL: $story.youtubeStreamingURL,
+                initialURL: youtubeInitialURL
+            )
         }
         .onChange(of: youtubeDownloadedURL) { _, newURL in
             guard let url = newURL else { return }

@@ -11,6 +11,7 @@ import AppKit
 @main
 struct ListenWiseApp: App {
     @State private var preferences = AppPreferences()
+    @State private var deepLink = DeepLinkRouter()
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("accentColorName") private var accentColorName = "blue"
 
@@ -22,11 +23,13 @@ struct ListenWiseApp: App {
         WindowGroup {
             ContentView()
                 .environment(preferences)
+                .environment(deepLink)
                 .tint(accentColor)
                 .onChange(of: appearance) { _, newValue in
                     applyAppearance(newValue)
                 }
                 .onAppear { applyAppearance(appearance) }
+                .onOpenURL { url in handleDeepLink(url) }
         }
 
         Settings {
@@ -34,6 +37,16 @@ struct ListenWiseApp: App {
                 .environment(preferences)
                 .tint(accentColor)
         }
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme?.lowercased() == "listenwise",
+              url.host?.lowercased() == "import",
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let raw = comps.queryItems?.first(where: { $0.name == "url" })?.value,
+              !raw.isEmpty
+        else { return }
+        deepLink.pendingYouTubeURL = raw
     }
 }
 
