@@ -16,6 +16,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case openRouter = "OpenRouter"
     case anthropic = "Anthropic"
     case googleAI = "Google AI Studio"
+    case voiceCloning = "Voice Cloning"
 
     var id: String { rawValue }
 
@@ -27,6 +28,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .openRouter: return "cloud"
         case .anthropic: return "server.rack"
         case .googleAI: return "sparkles"
+        case .voiceCloning: return "waveform.and.mic"
         }
     }
 }
@@ -77,6 +79,7 @@ struct SettingsView: View {
                 case .openRouter: openRouterSection
                 case .anthropic: anthropicSection
                 case .googleAI: GoogleAIKeysSettingsSection()
+                case .voiceCloning: SettingsVoiceCloning()
                 }
             }
             .navigationSplitViewColumnWidth(min: 480, ideal: 580)

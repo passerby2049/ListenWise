@@ -179,10 +179,6 @@ struct CardActionButton: View {
     }
 }
 
-// MARK: - Speech Synthesizer
-
-private let sharedSpeechSynthesizer = NSSpeechSynthesizer()
-
 // MARK: - Word Card
 
 struct WordCardView: View {
@@ -213,15 +209,7 @@ struct WordCardView: View {
                     .padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
-                Button {
-                    sharedSpeechSynthesizer.stopSpeaking()
-                    sharedSpeechSynthesizer.startSpeaking(explanation.word)
-                } label: {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.orange)
-                }
-                .buttonStyle(.plain)
+                SpeakerButton(text: explanation.word, size: 12)
                 Spacer()
                 if let onRefresh {
                     CardActionButton(icon: "arrow.clockwise", hoverColor: .orange, action: { onRefresh(explanation.word.lowercased()) }, help: "Refresh with current context", rotationAngle: 360)
@@ -287,9 +275,12 @@ struct WordCardView: View {
                     Divider()
                         .padding(.vertical, 4)
 
-                    Text(explanation.example_source)
-                        .font(.system(size: 13))
-                        .lineSpacing(1.5)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(explanation.example_source)
+                            .font(.system(size: 13))
+                            .lineSpacing(1.5)
+                        SpeakerButton(text: explanation.example_source)
+                    }
 
                     Text(explanation.example_target)
                         .font(.system(size: 12))

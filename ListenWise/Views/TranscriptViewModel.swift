@@ -250,6 +250,17 @@ class TranscriptViewModel {
                 }
             }
         }
+        // Drop any cards whose word is no longer marked — old builds of
+        // `removeMarkedWord` left `wordExplanations` in place, so stories
+        // saved before the fix can still carry orphaned cards.
+        let markedLower = Set(markedWords.map { $0.lowercased() })
+        let beforeWords = wordExplanations.count
+        wordExplanations.removeAll { !markedLower.contains($0.word.lowercased()) }
+        let beforeSentences = sentenceExplanations.count
+        sentenceExplanations.removeAll { !markedLower.contains($0.sentence.lowercased()) }
+        if wordExplanations.count != beforeWords { rebuildWordLearningResponse() }
+        if sentenceExplanations.count != beforeSentences { rebuildSentenceLearningResponse() }
+
         translatedText = story.savedTranslation
         if !translatedText.isEmpty {
             if let data = translatedText.data(using: .utf8),
@@ -447,6 +458,10 @@ class TranscriptViewModel {
         markedWords.remove(word)
         queriedWords.remove(word)
         globalOnlyWords.remove(word)
+        wordExplanations.removeAll { $0.word.lowercased() == word }
+        sentenceExplanations.removeAll { $0.sentence.lowercased() == word }
+        rebuildWordLearningResponse()
+        rebuildSentenceLearningResponse()
         GlobalVocabulary.shared.remove(word)
     }
 
@@ -457,6 +472,10 @@ class TranscriptViewModel {
         markedWords.removeAll()
         queriedWords.removeAll()
         globalOnlyWords.removeAll()
+        wordExplanations.removeAll()
+        sentenceExplanations.removeAll()
+        rebuildWordLearningResponse()
+        rebuildSentenceLearningResponse()
     }
 
     func saveLearnProgress() {

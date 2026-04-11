@@ -17,6 +17,23 @@ struct GoogleAIKeyEntry: Codable, Identifiable, Hashable {
     }
 }
 
+/// Metadata for a user-created cloned voice. The actual `PocketTtsVoiceData`
+/// blob lives in `Application Support/ListenWise/Voices/<id>.bin` and is
+/// loaded on demand by `TTSService`.
+struct ClonedVoiceEntry: Codable, Identifiable, Hashable {
+    var id: UUID
+    var name: String
+    var createdAt: Date
+    var durationSeconds: Double
+
+    init(id: UUID = UUID(), name: String, createdAt: Date = Date(), durationSeconds: Double) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.durationSeconds = durationSeconds
+    }
+}
+
 @Observable
 final class AppPreferences {
     var openRouterAPIKey: String {
@@ -89,6 +106,44 @@ final class AppPreferences {
     var selectedTranscriptionEngine: TranscriptionEngineID {
         get { TranscriptionEngineID(rawValue: transcriptionEngineID) ?? .appleSpeech }
         set { transcriptionEngineID = newValue.rawValue }
+    }
+
+    // MARK: - Voice Cloning (PocketTTS)
+
+    var clonedVoices: [ClonedVoiceEntry] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: "clonedVoices"),
+                  let decoded = try? JSONDecoder().decode([ClonedVoiceEntry].self, from: data)
+            else { return [] }
+            return decoded
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "clonedVoices")
+            }
+        }
+    }
+
+    var activeClonedVoiceID: UUID? {
+        get {
+            guard let str = UserDefaults.standard.string(forKey: "activeClonedVoiceID"),
+                  let id = UUID(uuidString: str) else { return nil }
+            return id
+        }
+        set {
+            if let id = newValue {
+                UserDefaults.standard.set(id.uuidString, forKey: "activeClonedVoiceID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "activeClonedVoiceID")
+            }
+        }
+    }
+
+    /// Whether the user has completed a PocketTTS model download in this install.
+    /// Stored as a hint; `TTSService` still verifies files exist on startup.
+    var pocketTTSDownloaded: Bool {
+        get { UserDefaults.standard.bool(forKey: "pocketTTSDownloaded") }
+        set { UserDefaults.standard.set(newValue, forKey: "pocketTTSDownloaded") }
     }
 
     /// "system", "light", or "dark"
